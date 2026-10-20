@@ -31,8 +31,14 @@ wally -o DP-1 -i left.jpg -o eDP-1 -i right.jpg
   animations keep exactly one canvas, and the next frame is never
   prefetched. Identical monitors share one compose and pay a plain copy
   each.
+- **Polite about CPU too**: a frame that decodes to the same pixels as
+  the previous one (optimized GIFs repeat frames all the time to pace
+  playback) is detected during the blend — nothing is written, no copy
+  is made and **the compositor is never woken** for that frame.
 - **Observable**: set `WALLY_DEBUG=1` and wally prints its resident set
-  (in kB) whenever it changes — handy to check against `swaybg` in htop.
+  (in kB) whenever it changes plus its cumulative CPU time (in ms) as it
+  grows — handy to compare honestly against `swaybg` or `awww` in htop.
+  `WALLY_DEBUG=2` also traces skipped commits.
 
 ## Formats
 
@@ -186,10 +192,13 @@ not implement layer shell and is out of scope. There is no X11 support.
   are stepped once per tick globally, so two monitors sharing a
   wallpaper show the same frame at the same time — and same-size
   monitors share the compose, each paying only a memcpy.
-- Set `WALLY_DEBUG=1` to print the resident set in kB whenever it changes.
-  On one 1080p output a static wallpaper and a screen-sized GIF both sit
-  *below* `swaybg` (which double-buffers); an animated WebP or a GIF that
-  needs resampling runs one canvas above that.
+- Set `WALLY_DEBUG=1` to print the resident set in kB whenever it changes,
+  plus cumulative CPU milliseconds as they grow. On one 1080p output a
+  static wallpaper and a screen-sized GIF both sit *below* `swaybg`
+  (which double-buffers); an animated WebP or a GIF that needs resampling
+  runs one canvas above that. Animated-wallpaper CPU is the frame decode
+  itself — compare the `cpu` lines between daemons before trusting
+  htop's coarse percentages.
 - The resampler is a hand-rolled separable Triangle filter working in
   byte buffers (pinned to the `image` crate's output within ±1 LSB by
   tests). A 1080p → 4K frame that took ~0.8 s through `image`'s generic

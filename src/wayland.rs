@@ -344,27 +344,60 @@ fn physical_size(s: &Surface) -> (u32, u32) {
     )
 }
 
-/// One-line resident-set report when `WALLY_DEBUG` is set, printed only
-/// when the value changes — so the footprint can be watched from the
-/// outside without a debugger and without spamming the log.
+/// WALLY_DEBUG verbosity: unset = off, `2` = per-event trace, anything
+/// else = the default one-line reports.
+fn debug_level() -> u32 {
+    match std::env::var("WALLY_DEBUG") {
+        Ok(v) if v.trim() == "2" => 2,
+        Ok(_) => 1,
+        Err(_) => 0,
+    }
+}
+
+/// Cumulative user+system CPU time in milliseconds, read from
+/// /proc/self/stat.
+fn cpu_time_ms() -> Option<u64> {
+    let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
+    // Fields 14 (utime) and 15 (stime), in clock ticks. Field 2 is the
+    // comm name "(wally)" — no spaces — so plain splitting is safe.
+    let mut fields = stat.split_whitespace();
+    let utime: u64 = fields.nth(13)?.parse().ok()?;
+    let stime: u64 = fields.next()?.parse().ok()?;
+    let clk = unsafe { libc::sysconf(libc::_SC_CLK_TCK) }.max(1) as u64;
+    Some((utime + stime) * 1000 / clk)
+}
+
+/// Resident-set and CPU-time report for `WALLY_DEBUG`, printed only when
+/// the RSS changes or the CPU total grows by 100 ms — so the footprint
+/// can be watched from the outside without a debugger and without
+/// spamming the log.
 fn debug_rss() {
     use std::sync::atomic::{AtomicU64, Ordering};
     static LAST_KB: AtomicU64 = AtomicU64::new(0);
+    static LAST_CPU_MS: AtomicU64 = AtomicU64::new(0);
 
-    let Ok(statm) = std::fs::read_to_string("/proc/self/statm") else {
+    if debug_level() == 0 {
         return;
-    };
-    let Some(pages) = statm
-        .split_whitespace()
-        .nth(1)
-        .and_then(|v| v.parse::<u64>().ok())
-    else {
-        return;
-    };
-    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) }.max(1) as u64;
-    let kb = pages.saturating_mul(page) / 1024;
-    if LAST_KB.swap(kb, Ordering::Relaxed) != kb {
-        eprintln!("wally: rss {kb} kB");
+    }
+    if let Ok(statm) = std::fs::read_to_string("/proc/self/statm") {
+        if let Some(pages) = statm
+            .split_whitespace()
+            .nth(1)
+            .and_then(|v| v.parse::<u64>().ok())
+        {
+            let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) }.max(1) as u64;
+            let kb = pages.saturating_mul(page) / 1024;
+            if LAST_KB.swap(kb, Ordering::Relaxed) != kb {
+                eprintln!("wally: rss {kb} kB");
+            }
+        }
+    }
+    if let Some(ms) = cpu_time_ms() {
+        let last = LAST_CPU_MS.load(Ordering::Relaxed);
+        if ms >= last + 100 {
+            LAST_CPU_MS.store(ms, Ordering::Relaxed);
+            eprintln!("wally: cpu {ms} ms");
+        }
     }
 }
 
@@ -433,6 +466,18 @@ fn commit_surface(s: &mut Surface, pw: u32, ph: u32, serial: u64) {
     }
     s.painted_serial = serial;
     s.dirty = false;
+}
+
+/// Record a frame as shown without talking to the compositor: the step
+/// produced exactly the pixels already on screen (GIFs in the wild often
+/// repeat frames to pace playback). Same bookkeeping as
+/// [`commit_surface`] minus the attach/damage/commit round-trip.
+fn skip_commit(s: &mut Surface, serial: u64) {
+    s.painted_serial = serial;
+    s.dirty = false;
+    if debug_level() >= 2 {
+        eprintln!("wally: unchanged frame — commit skipped");
+    }
 }
 
 /// Surfaces that display the same thing: (source index, mode, background,
@@ -708,6 +753,15 @@ impl App {
         for ((si, _mode, _bg, pw, ph), members) in groups {
             let look = surfaces[members[0]].look;
             let pi = members[0];
+            let serial = sources[si].source.serial();
+
+            // A frame that changed no pixels needs no compose, no copy
+            // and no commit — a surface already showing the previous
+            // frame is already showing this one. Members that missed the
+            // previous frame (fresh configure, resize, a newly added
+            // output) still repaint in full.
+            let unchanged = !sources[si].source.frame_changed();
+            let skip_ok = |s: &Surface| unchanged && !s.dirty && s.painted_serial + 1 == serial;
 
             // A hosted GIF's canvas is its host output's buffer: the frame
             // was blended straight into it during the step. Groups with
@@ -719,56 +773,70 @@ impl App {
                 .filter(|_| sources[si].source.is_hosted())
                 .and_then(|h| surfaces.iter().position(|s| &s.surface == h));
 
-            let painted = match host_idx {
-                // Pixels are already in this buffer.
-                Some(hi) if hi == pi => true,
-                Some(hi) => {
-                    let Some((iw, ih)) = sources[si].source.anim_dims() else {
-                        continue;
-                    };
-                    let (before, rest) = surfaces.split_at_mut(hi);
-                    let (host_s, after) = rest.split_at_mut(1);
-                    let host_raw = host_s[0].shm.as_ref().expect("host shm").slice();
-                    let target = if pi < hi {
-                        &mut before[pi]
-                    } else {
-                        &mut after[pi - hi - 1]
-                    };
-                    let dst = target.shm.as_mut().expect("realloc above").slice_mut();
-                    render::compose_xrgb_into(
-                        host_raw,
-                        (iw, ih),
-                        look.mode,
-                        pw,
-                        ph,
-                        look.background,
-                        dst,
-                    );
-                    true
-                }
-                // The ordinary path: compose from the source's pixels.
-                None => {
-                    let slice = surfaces[pi].shm.as_mut().expect("realloc above").slice_mut();
-                    compose_frame(sources, si, slice, pw, ph, look)
-                }
-            };
+            let mut painted = true;
+            if skip_ok(&surfaces[pi]) {
+                skip_commit(&mut surfaces[pi], serial);
+            } else {
+                painted = match host_idx {
+                    // Pixels are already in this buffer.
+                    Some(hi) if hi == pi => true,
+                    Some(hi) => {
+                        let Some((iw, ih)) = sources[si].source.anim_dims() else {
+                            continue;
+                        };
+                        let (before, rest) = surfaces.split_at_mut(hi);
+                        let (host_s, after) = rest.split_at_mut(1);
+                        let host_raw = host_s[0].shm.as_ref().expect("host shm").slice();
+                        let target = if pi < hi {
+                            &mut before[pi]
+                        } else {
+                            &mut after[pi - hi - 1]
+                        };
+                        let dst = target.shm.as_mut().expect("realloc above").slice_mut();
+                        render::compose_xrgb_into(
+                            host_raw,
+                            (iw, ih),
+                            look.mode,
+                            pw,
+                            ph,
+                            look.background,
+                            dst,
+                        );
+                        true
+                    }
+                    // The ordinary path: compose from the source's pixels.
+                    None => {
+                        let slice =
+                            surfaces[pi].shm.as_mut().expect("realloc above").slice_mut();
+                        compose_frame(sources, si, slice, pw, ph, look)
+                    }
+                };
+            }
             if !painted {
                 // Keep the previous frame on screen; retry after backoff.
                 continue;
             }
-            let serial = sources[si].source.serial();
 
-            // Identical siblings get the finished bytes verbatim.
+            // Identical siblings get the finished bytes verbatim — unless
+            // they already show them (unchanged frame, nothing missed).
             let (before, rest) = surfaces.split_at_mut(pi);
             let (primary, after) = rest.split_at_mut(1);
             let src: &[u8] = primary[0].shm.as_ref().expect("realloc above").slice();
             for &i in members.iter().filter(|&&i| i != pi) {
                 let s = if i < pi { &mut before[i] } else { &mut after[i - pi - 1] };
-                s.shm.as_mut().expect("realloc above").slice_mut().copy_from_slice(src);
+                if skip_ok(s) {
+                    skip_commit(s, serial);
+                } else {
+                    s.shm.as_mut().expect("realloc above").slice_mut().copy_from_slice(src);
+                }
             }
 
             for &i in &members {
-                commit_surface(&mut surfaces[i], pw, ph, serial);
+                let s = &mut surfaces[i];
+                if !s.dirty && s.painted_serial == serial {
+                    continue; // skip_commit already recorded this frame
+                }
+                commit_surface(s, pw, ph, serial);
             }
         }
     }

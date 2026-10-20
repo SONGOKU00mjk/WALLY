@@ -113,6 +113,10 @@ pub struct Anim {
     /// Bumped whenever new pixels appear (in the canvas or the host
     /// buffer).
     serial: u64,
+    /// Whether the most recent step changed any on-screen pixel. GIFs in
+    /// the wild often repeat frames to pace playback; a step that wrote
+    /// no new bytes lets the paint path skip compose, copy and commit.
+    frame_changed: bool,
     /// When the current frame should be replaced.
     next_step: Option<Instant>,
 }
@@ -174,18 +178,28 @@ struct Canvas<'a> {
     h: u32,
     /// `Some(bg)` = hosted XRGB canvas; `None` = owned RGBA canvas.
     hosted: Option<Color>,
+    /// Set when any mutation actually altered a byte. GIFs from the wild
+    /// often repeat frames (or re-draw an unchanged sub-rect) to pace
+    /// playback; detecting a no-op step lets the paint path skip the
+    /// compose, the sibling copies and the commit entirely.
+    changed: bool,
 }
 
 impl Canvas<'_> {
     fn owned(img: &mut RgbaImage) -> Canvas<'_> {
         let (w, h) = img.dimensions();
-        Canvas { bytes: &mut *img, w, h, hosted: None }
+        Canvas { bytes: &mut *img, w, h, hosted: None, changed: false }
     }
 
     /// `bytes` is `w * h * 4` XRGB8888 bytes.
     fn hosted(bytes: &mut [u8], w: u32, h: u32, bg: Color) -> Canvas<'_> {
         debug_assert_eq!(bytes.len(), w as usize * h as usize * 4);
-        Canvas { bytes, w, h, hosted: Some(bg) }
+        Canvas { bytes, w, h, hosted: Some(bg), changed: false }
+    }
+
+    /// Whether any mutation in this canvas's lifetime altered a byte.
+    fn changed(&self) -> bool {
+        self.changed
     }
 
     /// The previous frame's disposal takes effect now (it was deferred so
@@ -215,7 +229,10 @@ impl Canvas<'_> {
         for y in top..top + height {
             let row = (y * cw + left) * 4;
             for p in self.bytes[row..row + width * 4].as_chunks_mut::<4>().0 {
-                *p = px;
+                if *p != px {
+                    *p = px;
+                    self.changed = true;
+                }
             }
         }
     }
@@ -253,7 +270,11 @@ impl Canvas<'_> {
             let (row, rest) = src.split_at(row_len);
             let d = (y * stride + left as usize) * 4;
             let n = row.len().min(self.bytes.len().saturating_sub(d));
-            self.bytes[d..d + n].copy_from_slice(&row[..n]);
+            let dst = &mut self.bytes[d..d + n];
+            if dst != &row[..n] {
+                dst.copy_from_slice(&row[..n]);
+                self.changed = true;
+            }
             src = rest;
         }
     }
@@ -285,9 +306,16 @@ impl Canvas<'_> {
                     let d = (y * cw + x) * 4;
                     if hosted {
                         // RGBA frame -> XRGB canvas.
-                        bytes[d..d + 4].copy_from_slice(&[frame[s + 2], frame[s + 1], frame[s], 0]);
+                        let px = [frame[s + 2], frame[s + 1], frame[s], 0];
+                        if bytes[d..d + 4] != px[..] {
+                            bytes[d..d + 4].copy_from_slice(&px);
+                            self.changed = true;
+                        }
                     } else {
-                        bytes[d..d + 4].copy_from_slice(&frame[s..s + 4]);
+                        if bytes[d..d + 4] != frame[s..s + 4] {
+                            bytes[d..d + 4].copy_from_slice(&frame[s..s + 4]);
+                            self.changed = true;
+                        }
                     }
                 }
             }
@@ -352,6 +380,17 @@ impl Source {
         match self {
             Source::Animated(a) => a.serial,
             _ => 1,
+        }
+    }
+
+    /// Whether the most recent animation step changed any pixel. Static
+    /// sources always report true. A `false` lets the paint path skip the
+    /// compose, the sibling copies and the commit — every surface that
+    /// showed the previous frame is already showing exactly these pixels.
+    pub fn frame_changed(&self) -> bool {
+        match self {
+            Source::Animated(a) => a.frame_changed,
+            _ => true,
         }
     }
 
@@ -504,6 +543,7 @@ impl Source {
                     a.hosted = true;
                     a.host_bg = bg;
                     a.delay = normalize_delay(gif_delay(delay_cs));
+                    a.frame_changed = true; // state transition: repaint freely
                     a.schedule();
                 }
                 true
@@ -562,16 +602,23 @@ impl Anim {
     fn advance(&mut self) -> bool {
         match &mut self.stream {
             AnimStream::Gif(gs) => {
-                let Some(canvas) = self.current.as_mut() else {
-                    // Hosted GIFs step through `step_hosted`; a stale
-                    // caller must not spin here.
-                    return false;
+                let (pulled, changed) = {
+                    let Some(canvas) = self.current.as_mut() else {
+                        // Hosted GIFs step through `step_hosted`; a stale
+                        // caller must not spin here.
+                        return false;
+                    };
+                    let mut cv = Canvas::owned(canvas);
+                    let res = pull_gif(gs, &mut cv);
+                    let changed = cv.changed();
+                    (res, changed)
                 };
-                match pull_gif(gs, &mut Canvas::owned(canvas)) {
+                match pulled {
                     Ok(Some(info)) => {
                         self.delay = normalize_delay(gif_delay(info.delay_cs));
                         self.serial += 1;
                         self.errors = 0;
+                        self.frame_changed = changed;
                         true
                     }
                     Ok(None) | Err(_) => self.reopen_gif_any(None),
@@ -632,6 +679,7 @@ impl Anim {
                     self.delay = normalize_delay(gif_delay(info.delay_cs));
                     self.serial += 1;
                     self.errors = 0;
+                    self.frame_changed = true; // restart: repaint regardless
                     self.schedule();
                     true
                 }
@@ -655,6 +703,7 @@ impl Anim {
                     self.delay = normalize_delay(gif_delay(info.delay_cs));
                     self.serial += 1;
                     self.errors = 0;
+                    self.frame_changed = true; // restart: repaint regardless
                     self.schedule();
                     true
                 }
@@ -707,6 +756,7 @@ impl Anim {
         self.delay = normalize_delay(delay_duration(delay));
         self.serial += 1;
         self.errors = 0;
+        self.frame_changed = true;
     }
 
     /// Hosted step: pull the next frame and blend it straight into the
@@ -724,11 +774,18 @@ impl Anim {
         let AnimStream::Gif(gs) = &mut self.stream else {
             return; // not a GIF; nothing to blend
         };
-        match pull_gif(gs, &mut Canvas::hosted(dst, w, h, self.host_bg)) {
+        let (pulled, changed) = {
+            let mut canvas = Canvas::hosted(dst, w, h, self.host_bg);
+            let res = pull_gif(gs, &mut canvas);
+            let changed = canvas.changed();
+            (res, changed)
+        };
+        match pulled {
             Ok(Some(info)) => {
                 self.delay = normalize_delay(gif_delay(info.delay_cs));
                 self.serial += 1;
                 self.errors = 0;
+                self.frame_changed = changed;
                 self.schedule();
             }
             Ok(None) | Err(_) => {
@@ -782,6 +839,7 @@ fn open_gif(path: &Path) -> Result<Source> {
                 errors: 0,
                 frozen: false,
                 serial: 1,
+                frame_changed: true,
                 next_step: Some(Instant::now() + first_delay),
             })))
         }
@@ -951,6 +1009,7 @@ fn open_webp(path: &Path) -> Result<Source> {
                 errors: 0,
                 frozen: false,
                 serial: 1,
+                frame_changed: true,
                 next_step: Some(Instant::now() + first_delay),
             })))
         }
@@ -1160,6 +1219,78 @@ mod tests {
             Source::Animated(a) => a.current.as_ref().expect("frame on hand"),
             _ => panic!("must be animated"),
         }
+    }
+
+    #[test]
+    fn canvas_reports_only_real_changes() {
+        // A frame blended onto a matching canvas is a no-op; the same
+        // frame onto a different canvas is a change.
+        let mut img = RgbaImage::new(4, 2);
+        let info = GifFrameInfo {
+            left: 0,
+            top: 0,
+            width: 4,
+            height: 2,
+            dispose: gif::DisposalMethod::Keep,
+            delay_cs: 10,
+        };
+        let frame: Vec<u8> = (0..4 * 2)
+            .map(|i| [i as u8, 10, 20, 255])
+            .flat_map(|px| px.into_iter())
+            .collect();
+
+        let mut cv = Canvas::owned(&mut img);
+        cv.blend_frame(&info, &frame);
+        assert!(cv.changed());
+
+        // Blend the identical frame onto the already-filled canvas.
+        let mut cv2 = Canvas::owned(&mut img);
+        cv2.blend_frame(&info, &frame);
+        assert!(!cv2.changed());
+
+        // One different pixel flips the flag again.
+        let mut changed_frame = frame.clone();
+        changed_frame[4] = 99;
+        let mut cv3 = Canvas::owned(&mut img);
+        cv3.blend_frame(&info, &changed_frame);
+        assert!(cv3.changed());
+    }
+
+    #[test]
+    fn gif_repeated_frame_reports_no_change() {
+        // anim-repeat.gif shows red, red (an exact repeat), green, blue.
+        // Optimized GIFs repeat frames to pace playback; a repeated frame
+        // must be detected so the paint path can skip the commit.
+        let mut src = Source::open(&fixture("anim-repeat.gif"), true).unwrap();
+        assert!(src.is_animated());
+
+        // The canvas starts transparent; frame 1 (opaque red) is a change.
+        assert!(src.frame_changed());
+        src.step();
+        assert!(!src.frame_changed(), "the repeated red frame changed nothing");
+        src.step();
+        assert!(src.frame_changed(), "green is a change");
+        src.step();
+        assert!(src.frame_changed(), "blue is a change");
+    }
+
+    #[test]
+    fn hosted_gif_repeated_frame_reports_no_change() {
+        let path = fixture("anim-repeat.gif");
+        let mut src = Source::open(&path, true).unwrap();
+        let dims = src.anim_dims().unwrap();
+        let mut buf = vec![0u8; dims.0 as usize * dims.1 as usize * 4];
+        let bg: Color = [1, 2, 3];
+        assert!(src.begin_host(bg, &mut buf));
+
+        // begin_host restarts into frame 1 (red over the bg fill) — a change.
+        assert!(src.frame_changed());
+        // Frame 2 repeats frame 1: the blend writes nothing new.
+        src.step_hosted(&mut buf);
+        assert!(!src.frame_changed(), "the repeated red frame changed nothing");
+        // Frame 3 (green) is a change.
+        src.step_hosted(&mut buf);
+        assert!(src.frame_changed());
     }
 
     #[test]
