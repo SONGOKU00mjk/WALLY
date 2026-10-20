@@ -1,0 +1,6 @@
+# Cross-compiling aarch64-musl needs no cross toolchain: the code is pure
+# Rust and rustc ships self-contained musl CRT objects, so rust-lld (bundled
+# with rustup) is enough. Scoped to this target only — native builds are
+# unaffected.
+[target.aarch64-unknown-linux-musl]
+linker = "rust-lld"
