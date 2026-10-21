@@ -9,6 +9,14 @@
 //! group — the first composes the frame straight into its buffer, the
 //! rest get a plain copy — so the expensive compose runs once per group
 //! and no second copy of the wallpaper ever exists in memory.
+//!
+//! Playback is presentation-gated: every commit carries a
+//! `wl_surface.frame` callback, and an animation whose last committed
+//! frame was never presented (output off, session locked, layer
+//! occluded) drops to a slow probe heartbeat instead of rendering for
+//! nobody. A surface that has never produced callback evidence at all
+//! keeps the old always-animate behavior, so a compositor without
+//! functioning frame callbacks can never slow playback down.
 
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
@@ -17,7 +25,8 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 use wayland_client::backend::{ReadEventsGuard, WaylandError};
 use wayland_client::protocol::{
-    wl_buffer, wl_compositor, wl_output, wl_region, wl_registry, wl_shm, wl_shm_pool, wl_surface,
+    wl_buffer, wl_callback, wl_compositor, wl_output, wl_region, wl_registry, wl_shm, wl_shm_pool,
+    wl_surface,
 };
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle};
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::{
@@ -49,6 +58,22 @@ const ERROR_BACKOFF: Duration = Duration::from_secs(1);
 /// buys a full re-fault of the buffer every frame.
 const ANIM_RELAX_IDLE: Duration = Duration::from_secs(2);
 
+/// When a compositor stops presenting an output (screen off, lid closed,
+/// session locked, layer fully occluded) the frame callback of the last
+/// committed buffer never fires. A gated animation then steps at most
+/// once per this interval: a heartbeat that can never wedge and keeps the
+/// animation at most one interval behind when the output comes back,
+/// while cutting the decode/blend/commit work for pixels nobody can see.
+const ANIM_PROBE: Duration = Duration::from_secs(5);
+
+/// How long after a frame callback a source still counts as visible.
+/// Covers the gap between a commit and its own callback on slower-than-
+/// animation displays: without it a 20 ms GIF on a 30 Hz panel would look
+/// un-presented between every commit and drop to probe pacing. Real
+/// disappearance (callbacks stop entirely) outlives the window; our own
+/// commits do not refresh it, so an off output still parks after it.
+const GATE_GRACE: Duration = Duration::from_millis(150);
+
 /// One decoded image, shared by every surface pointed at the same
 /// (path, animate) pair.
 struct SourceState {
@@ -61,6 +86,9 @@ struct SourceState {
     /// canvas bytes live in that surface's buffer, so the host must not
     /// flip between outputs that merely look identical.
     host: Option<wl_surface::WlSurface>,
+    /// Next gated (probe) step, while no surface presenting this source
+    /// is being composited. `None` when visible or not yet probed.
+    probe_at: Option<Instant>,
 }
 
 struct OutputEntry {
@@ -97,6 +125,19 @@ struct Surface {
     pool: Option<wl_shm_pool::WlShmPool>,
     buffer: Option<wl_buffer::WlBuffer>,
     pending_release: Vec<wl_buffer::WlBuffer>,
+
+    /// Outstanding `wl_surface.frame` callback of the most recent commit
+    /// (one slot; a newer request replaces an older one — older probe
+    /// callbacks simply match nothing when they finally fire).
+    frame_cb: Option<wl_callback::WlCallback>,
+    /// Whether the last committed frame was actually presented: its
+    /// frame callback fired. False from the commit until the callback.
+    presented: bool,
+    /// Lifetime presentation evidence: `Some` once this surface ever got
+    /// a frame callback. None surfaces are treated as visible — this is
+    /// what makes the gate fail open for compositors that never send
+    /// callbacks.
+    frame_seen: Option<Instant>,
 }
 
 pub struct App {
@@ -133,6 +174,28 @@ mod tests {
     use super::*;
 
     use crate::cli::OutputCfg;
+
+    #[test]
+    fn presentation_gate_fails_open_and_honors_grace() {
+        let now = Instant::now();
+        // No evidence at all: the compositor may not do frame callbacks —
+        // keep the pre-gating always-animate behavior.
+        assert!(gate_open(None, false, now));
+        assert!(gate_open(None, true, now));
+        // Stale evidence + unpresented commit: the output stopped being
+        // composited — gate closed.
+        assert!(!gate_open(Some(now - Duration::from_secs(5)), false, now));
+        // Presented: open, no matter how old the evidence is.
+        assert!(gate_open(Some(now - Duration::from_secs(5)), true, now));
+        // Fresh callback but the newest commit is not presented yet: the
+        // commit→callback gap of slower-than-animation displays — grace
+        // keeps playback at full speed.
+        assert!(gate_open(
+            Some(now - Duration::from_millis(100)),
+            false,
+            now
+        ));
+    }
 
     #[test]
     fn source_keys_are_deduplicated_per_animate_flag() {
@@ -182,6 +245,7 @@ mod tests {
             source,
             last_error: None,
             host: None,
+            probe_at: None,
         };
         let look = Look {
             mode: Mode::Fill,
@@ -191,22 +255,8 @@ mod tests {
 
         let mut a = vec![0u8; 8 * 8 * 4];
         let mut b = vec![0xAAu8; 8 * 8 * 4];
-        let (ok_a, rect_a) = compose_frame(
-            std::slice::from_mut(&mut st),
-            0,
-            &mut a,
-            8,
-            8,
-            look
-        );
-        let (ok_b, rect_b) = compose_frame(
-            std::slice::from_mut(&mut st),
-            0,
-            &mut b,
-            8,
-            8,
-            look
-        );
+        let (ok_a, rect_a) = compose_frame(std::slice::from_mut(&mut st), 0, &mut a, 8, 8, look);
+        let (ok_b, rect_b) = compose_frame(std::slice::from_mut(&mut st), 0, &mut b, 8, 8, look);
         assert!(ok_a && ok_b);
         assert_eq!(rect_a, rect_b, "rect tracking is deterministic too");
         assert_eq!(a, b, "two composes of the same frame are identical");
@@ -251,6 +301,7 @@ mod tests {
             source,
             last_error: None,
             host: None,
+            probe_at: None,
         };
         report("after decode (image in RAM)", base);
 
@@ -339,6 +390,7 @@ pub fn run(config: Config) -> Result<()> {
                     source,
                     last_error: None,
                     host: None,
+                    probe_at: None,
                 }),
                 Err(e) if first_error.is_none() => {
                     first_error = Some(e.context(format!("could not load `{}`", key.0.display())));
@@ -617,19 +669,55 @@ fn host_candidate(surfaces: &[Surface], source: &Source) -> Option<(usize, Color
         .map(|idx| (idx, surfaces[idx].look.background))
 }
 
+/// Whether a surface's source may keep animating. Two inputs:
+/// `frame_seen` — has this surface EVER been confirmed by a frame
+/// callback — and `presented` — did the most recent committed frame's
+/// callback fire. `frame_seen == None` keeps the old always-animate
+/// behavior, so a compositor without (functioning) frame callbacks can
+/// never slow playback down. Once evidence exists, `presented` decides;
+/// a still-fresh callback (within [`GATE_GRACE`]) keeps the gate open
+/// across the commit→callback gap of slower-than-animation displays.
+fn gate_open(frame_seen: Option<Instant>, presented: bool, now: Instant) -> bool {
+    match frame_seen {
+        None => true,
+        Some(t) => presented || now.duration_since(t) < GATE_GRACE,
+    }
+}
+
+/// Whether any surface showing source `si` has presentation liveness.
+fn source_visible(surfaces: &[Surface], si: usize, now: Instant) -> bool {
+    surfaces.iter().any(|s| match s.source {
+        Some(x) if x == si => gate_open(s.frame_seen, s.presented, now),
+        _ => false,
+    })
+}
+
 /// Attach, damage and commit a finished buffer, then record the serial
 /// that is on screen. `rect` limits the compositor-side damage to the
 /// pixels that actually changed (`None` = the whole buffer).
-fn commit_surface(s: &mut Surface, pw: u32, ph: u32, serial: u64, rect: Option<render::Rect>) {
+fn commit_surface(
+    qh: &QueueHandle<App>,
+    s: &mut Surface,
+    pw: u32,
+    ph: u32,
+    serial: u64,
+    rect: Option<render::Rect>,
+) {
     if let Some(buffer) = &s.buffer {
         s.surface.attach(Some(buffer), 0, 0);
         match rect {
-            Some(r) => {
-                s.surface
-                    .damage_buffer(r.x as i32, r.y as i32, r.w as i32, r.h as i32)
-            }
+            Some(r) => s
+                .surface
+                .damage_buffer(r.x as i32, r.y as i32, r.w as i32, r.h as i32),
             None => s.surface.damage_buffer(0, 0, pw as i32, ph as i32),
         }
+        // Ask the compositor to tell us when this frame has been
+        // presented. The callback's arrival is the liveness signal that
+        // keeps the animation at full speed; its absence (screen off,
+        // locked, occluded) is what parks it. Must precede the commit —
+        // the callback binds to the commit that follows the request.
+        s.frame_cb = Some(s.surface.frame(qh, ()));
+        s.presented = false;
         s.surface.commit();
     }
     s.painted_serial = serial;
@@ -676,6 +764,24 @@ impl App {
             };
             if now < at {
                 continue;
+            }
+            // Presentation gating: the compositor confirms every committed
+            // frame via wl_surface.frame. When the last commit's callback
+            // has not fired — output off, lid closed, session locked, the
+            // layer occluded — stop paying full animation CPU for pixels
+            // nobody can see, but keep a slow heartbeat step so the
+            // animation can neither wedge nor fall arbitrarily behind.
+            if !source_visible(surfaces, i, now) {
+                match st.probe_at {
+                    Some(t) if now < t => continue,
+                    _ => {}
+                }
+                if debug_level() >= 2 {
+                    eprintln!("wally: no presentation — probing animation (output off or locked?)");
+                }
+                st.probe_at = Some(now + ANIM_PROBE);
+            } else if st.probe_at.take().is_some() && debug_level() >= 2 {
+                eprintln!("wally: presentation resumed — animation at full speed");
             }
             if st.source.is_hosted() {
                 // Keep stepping in the buffer the canvas lives in.
@@ -766,7 +872,17 @@ impl App {
                 continue;
             }
             if let Some(at) = st.source.next_step() {
-                let wait = at.saturating_duration_since(now);
+                // Mirror tick()'s gating: a gated source wakes for its
+                // next probe, not for its (already due) frame deadline —
+                // otherwise poll(0) would busy-loop while paused.
+                let wait = if source_visible(&self.surfaces, i, now) {
+                    at.saturating_duration_since(now)
+                } else {
+                    match st.probe_at {
+                        Some(t) => t.saturating_duration_since(now),
+                        None => at.saturating_duration_since(now),
+                    }
+                };
                 min = Some(match min {
                     Some(m) if m <= wait => m,
                     _ => wait,
@@ -863,6 +979,12 @@ impl App {
             pool: None,
             buffer: None,
             pending_release: Vec::new(),
+            frame_cb: None,
+            // Optimistic until the first commit proves otherwise: the
+            // very first frames must animate without waiting for a
+            // callback that has not been requested yet.
+            presented: true,
+            frame_seen: None,
         });
         if let Some(o) = self.outputs.iter_mut().find(|o| o.output == *output) {
             o.surfaced = true;
@@ -915,7 +1037,7 @@ impl App {
             let s = &mut surfaces[i];
             let slice = s.shm.as_mut().expect("realloc above").slice_mut();
             render::fill(slice, s.look.color.unwrap_or(s.look.background));
-            commit_surface(s, pw, ph, 1, None);
+            commit_surface(qh, s, pw, ph, 1, None);
             // The color lives in the memfd now; drop our pages (below).
             if let Some(m) = s.shm.as_ref() {
                 m.relax();
@@ -987,9 +1109,10 @@ impl App {
                             &mut after[pi - hi - 1]
                         };
                         let dst = target.shm.as_mut().expect("realloc above").slice_mut();
-                        painted_rect = sources[si].source.frame_dirty().and_then(|d| {
-                            render::dirty_dest((iw, ih), look.mode, pw, ph, d)
-                        });
+                        painted_rect = sources[si]
+                            .source
+                            .frame_dirty()
+                            .and_then(|d| render::dirty_dest((iw, ih), look.mode, pw, ph, d));
                         match painted_rect {
                             Some(r) => render::compose_xrgb_into_rect(
                                 host_raw,
@@ -1073,7 +1196,7 @@ impl App {
                 } else {
                     None
                 };
-                commit_surface(s, pw, ph, serial, rect);
+                commit_surface(qh, s, pw, ph, serial, rect);
             }
 
             // The pixels are committed and live in the memfd the
@@ -1281,6 +1404,33 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for App {
                 }
             }
             _ => {}
+        }
+    }
+}
+
+impl Dispatch<wl_callback::WlCallback, ()> for App {
+    fn event(
+        state: &mut Self,
+        proxy: &wl_callback::WlCallback,
+        event: wl_callback::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if !matches!(event, wl_callback::Event::Done { .. }) {
+            return;
+        }
+        // The frame we asked for was presented: this output is alive.
+        // Only the most recent request is tracked; older ones (probes
+        // that piled up while paused) match nothing — one Done suffices,
+        // and the next probe would re-arm the slot anyway.
+        for s in &mut state.surfaces {
+            if s.frame_cb.as_ref().is_some_and(|cb| cb == proxy) {
+                s.frame_cb = None;
+                s.presented = true;
+                s.frame_seen = Some(Instant::now());
+                break;
+            }
         }
     }
 }

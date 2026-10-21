@@ -46,6 +46,13 @@ wally -o DP-1 -i left.jpg -o eDP-1 -i right.jpg
   damaged at the compositor: measured 5x cheaper per frame than a full
   recompose on a 1080p panel. Resample filter tables are built once per
   geometry, not once per frame.
+- **Zero CPU when nothing can see it**: every commit carries a
+  `wl_surface.frame` callback. When the compositor stops presenting an
+  output — screen off, lid closed, session locked, the layer occluded —
+  the animation drops to one probe step every 5 s instead of rendering
+  at full speed for nobody, and returns to full speed the moment frames
+  are presented again. Compositors without frame callbacks keep the old
+  always-animate behavior, so playback can never slow down.
 - **Observable**: set `WALLY_DEBUG=1` and wally prints its resident set
   (in kB) whenever it changes plus its cumulative CPU time (in ms) as it
   grows — handy to compare honestly against `swaybg` or `awww` in htop.
@@ -117,7 +124,7 @@ Options:
 ./install.sh --check            # see what this machine has
 ./install.sh --uninstall        # remove every installed copy
 PREFIX=/opt/wally ./install.sh  # different prefix
-WALLY_REF=v0.6.1 ./install.sh   # build a tagged release instead of main
+WALLY_REF=v0.7.0 ./install.sh   # build a tagged release instead of main
 ```
 
 Prebuilt glibc binaries for x86_64 and aarch64 Linux are attached to each

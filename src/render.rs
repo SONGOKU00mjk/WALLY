@@ -82,8 +82,14 @@ impl Rect {
     /// Smallest rectangle covering both (clipping overflow to `u32::MAX`
     /// is harmless: callers intersect with their buffer bounds anyway).
     pub fn union(self, other: Rect) -> Rect {
-        let x1 = self.x.saturating_add(self.w).max(other.x.saturating_add(other.w));
-        let y1 = self.y.saturating_add(self.h).max(other.y.saturating_add(other.h));
+        let x1 = self
+            .x
+            .saturating_add(self.w)
+            .max(other.x.saturating_add(other.w));
+        let y1 = self
+            .y
+            .saturating_add(self.h)
+            .max(other.y.saturating_add(other.h));
         Rect {
             x: self.x.min(other.x),
             y: self.y.min(other.y),
@@ -93,8 +99,14 @@ impl Rect {
     }
 
     pub fn intersect(self, other: Rect) -> Rect {
-        let x1 = self.x.saturating_add(self.w).min(other.x.saturating_add(other.w));
-        let y1 = self.y.saturating_add(self.h).min(other.y.saturating_add(other.h));
+        let x1 = self
+            .x
+            .saturating_add(self.w)
+            .min(other.x.saturating_add(other.w));
+        let y1 = self
+            .y
+            .saturating_add(self.h)
+            .min(other.y.saturating_add(other.h));
         Rect {
             x: self.x.max(other.x),
             y: self.y.max(other.y),
@@ -580,13 +592,7 @@ fn place(src: &Src, from: Region, tw: u32, th: u32, bg: Color, dst: &mut [u8], a
 /// destination pixel any source pixel of `dirty` can influence under
 /// the resamplers' kernels lies inside it, and letterbox pixels (which
 /// never change) are excluded.
-pub fn dirty_dest(
-    src_dims: (u32, u32),
-    mode: Mode,
-    pw: u32,
-    ph: u32,
-    dirty: Rect,
-) -> Option<Rect> {
+pub fn dirty_dest(src_dims: (u32, u32), mode: Mode, pw: u32, ph: u32, dirty: Rect) -> Option<Rect> {
     if pw == 0 || ph == 0 || src_dims.0 == 0 || src_dims.1 == 0 {
         return None;
     }
@@ -630,7 +636,12 @@ pub fn dirty_dest(
         w: dx1 - dx0,
         h: dy1 - dy0,
     }
-    .intersect(Rect { x: ox, y: oy, w: tw, h: th });
+    .intersect(Rect {
+        x: ox,
+        y: oy,
+        w: tw,
+        h: th,
+    });
     if rect.is_empty() {
         return None;
     }
@@ -908,7 +919,15 @@ pub fn compose_xrgb_into_rect(
     compose_src_into_rect(&Src::xrgb(raw, dims.0, dims.1), mode, pw, ph, bg, dst, rect);
 }
 
-fn compose_src_into_rect(src: &Src, mode: Mode, pw: u32, ph: u32, bg: Color, dst: &mut [u8], rect: Rect) {
+fn compose_src_into_rect(
+    src: &Src,
+    mode: Mode,
+    pw: u32,
+    ph: u32,
+    bg: Color,
+    dst: &mut [u8],
+    rect: Rect,
+) {
     debug_assert_eq!(dst.len(), pw as usize * ph as usize * 4);
     let (iw, ih) = src.dims();
     if iw == 0 || ih == 0 || pw == 0 || ph == 0 {
@@ -927,7 +946,12 @@ fn compose_src_into_rect(src: &Src, mode: Mode, pw: u32, ph: u32, bg: Color, dst
         w: rect.w,
         h: rect.h,
     }
-    .intersect(Rect { x: 0, y: 0, w: tw, h: th });
+    .intersect(Rect {
+        x: 0,
+        y: 0,
+        w: tw,
+        h: th,
+    });
     if local.is_empty() {
         return;
     }
@@ -1366,10 +1390,30 @@ mod tests {
             (80, 80, Mode::Fit),
         ];
         let dirty = [
-            Rect { x: 10, y: 5, w: 20, h: 9 },
-            Rect { x: 0, y: 0, w: 96, h: 4 },
-            Rect { x: 50, y: 30, w: 46, h: 34 },
-            Rect { x: 47, y: 0, w: 4, h: 64 },
+            Rect {
+                x: 10,
+                y: 5,
+                w: 20,
+                h: 9,
+            },
+            Rect {
+                x: 0,
+                y: 0,
+                w: 96,
+                h: 4,
+            },
+            Rect {
+                x: 50,
+                y: 30,
+                w: 46,
+                h: 34,
+            },
+            Rect {
+                x: 47,
+                y: 0,
+                w: 4,
+                h: 64,
+            },
         ];
 
         for (pw, ph, mode) in cases {
@@ -1391,7 +1435,11 @@ mod tests {
                 for y in 0..ph {
                     for x in 0..pw {
                         let i = (y as usize * pw as usize + x as usize) * 4;
-                        let want = if inside(x, y) { &full[i..i + 4] } else { &other_full[i..i + 4] };
+                        let want = if inside(x, y) {
+                            &full[i..i + 4]
+                        } else {
+                            &other_full[i..i + 4]
+                        };
                         assert_eq!(
                             &dst[i..i + 4],
                             want,
@@ -1408,7 +1456,21 @@ mod tests {
     /// returned rect is always inside the output and the image's area.
     #[test]
     fn dirty_dest_falls_back_when_restriction_does_not_pay() {
-        assert_eq!(dirty_dest((96, 64), Mode::Tile, 96, 64, Rect { x: 0, y: 0, w: 5, h: 5 }), None);
+        assert_eq!(
+            dirty_dest(
+                (96, 64),
+                Mode::Tile,
+                96,
+                64,
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: 5,
+                    h: 5
+                }
+            ),
+            None
+        );
         // Whole image changed: full compose.
         assert_eq!(
             dirty_dest(
@@ -1416,12 +1478,30 @@ mod tests {
                 Mode::Stretch,
                 96,
                 64,
-                Rect { x: 0, y: 0, w: 96, h: 64 }
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: 96,
+                    h: 64
+                }
             ),
             None
         );
         // Mapped rects always land inside the buffer.
-        for r in [Rect { x: 0, y: 0, w: 2, h: 2 }, Rect { x: 90, y: 60, w: 6, h: 4 }] {
+        for r in [
+            Rect {
+                x: 0,
+                y: 0,
+                w: 2,
+                h: 2,
+            },
+            Rect {
+                x: 90,
+                y: 60,
+                w: 6,
+                h: 4,
+            },
+        ] {
             if let Some(rect) = dirty_dest((96, 64), Mode::Fit, 200, 100, r) {
                 assert!(rect.x + rect.w <= 200 && rect.y + rect.h <= 100);
                 // Letterboxed: the image area is (25..175, 0..100).
@@ -1449,7 +1529,12 @@ mod tests {
 
         let (pw, ph) = (1920u32, 1080u32);
         let mut dst = vec![0u8; pw as usize * ph as usize * 4];
-        let dirty = Rect { x: 0, y: 240, w: 800, h: 120 };
+        let dirty = Rect {
+            x: 0,
+            y: 240,
+            w: 800,
+            h: 120,
+        };
         let rect = dirty_dest((iw, ih), Mode::Stretch, pw, ph, dirty).expect("restricts");
 
         fn time_ms(f: &mut dyn FnMut()) -> f64 {

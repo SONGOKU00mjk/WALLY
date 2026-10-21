@@ -2106,7 +2106,10 @@ mod tests {
             let Some(r) = src.frame_dirty() else {
                 continue; // restart frame: full repaint, trivially covered
             };
-            assert!(r.x + r.w <= w && r.y + r.h <= h, "rect {r:?} inside {w}x{h}");
+            assert!(
+                r.x + r.w <= w && r.y + r.h <= h,
+                "rect {r:?} inside {w}x{h}"
+            );
             for y in 0..h {
                 for x in 0..w {
                     if before.get_pixel(x, y) != after.get_pixel(x, y) {
