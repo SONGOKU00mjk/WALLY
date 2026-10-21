@@ -67,7 +67,7 @@ libc = "0.2"
 # proptest fuzzes the resampler over arbitrary sizes.
 assert_cmd = "2"
 predicates = "3"
-criterion = { version = "0.7", default-features = false, features = ["cargo_bench_support"] }
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 proptest = "1"
 
 [[bin]]
