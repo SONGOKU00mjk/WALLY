@@ -24,7 +24,7 @@ jobs:
     name: formatting
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -50,7 +50,7 @@ jobs:
             args: "--no-default-features --features jxl"
             nasm: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -78,7 +78,7 @@ jobs:
     name: install.sh syntax
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: sh -n install.sh
       - name: shellcheck
         run: |
