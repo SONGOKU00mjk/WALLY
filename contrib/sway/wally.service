@@ -1,0 +1,24 @@
+[Unit]
+Description=wally — Wayland wallpaper setter
+Documentation=https://github.com/SONGOKU00mjk/WALLY
+# Only run inside a session that actually has a Wayland display; avoids a
+# failed unit on every headless/loginless boot.
+ConditionEnvironment=WAYLAND_DISPLAY
+# Part of the sway session: pulled in with it, started after it, and the
+# wallpaper is gone if the session target is stopped. Requires/After/
+# WantedBy need the sway-session.target that sway-systemd (or uwsm)
+# provides — see https://github.com/alebastr/sway-systemd
+Requires=sway-session.target
+After=sway-session.target
+
+[Service]
+Type=simple
+# Change the image path, or drop -i for a solid color with -c.
+# --replace makes a restart take over the old wally's surfaces with no
+# black-screen gap instead of stacking a second instance behind it.
+ExecStart=/usr/bin/wally --replace -i %h/pictures/wallpaper.png
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=sway-session.target

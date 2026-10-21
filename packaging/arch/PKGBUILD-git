@@ -1,0 +1,39 @@
+# Maintainer: SONGOKU00mjk <SONGOKU00mjk@users.noreply.github.com>
+# Tracks the default branch. Same default feature set as the stable
+# package and install.sh: AVIF on (nasm on x86_64), JXL off.
+
+pkgname=wally-git
+pkgver=1.0.0.r0.g0000000
+pkgrel=1
+pkgdesc="Minimal Wayland wallpaper setter with first-class GIF and animated WebP support (git master)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/SONGOKU00mjk/WALLY"
+license=('GPL-3.0-or-later')
+depends=('glibc' 'gcc-libs')
+makedepends=('cargo' 'git' 'nasm')
+provides=(wally)
+conflicts=(wally)
+source=("git+$url.git")
+sha256sums=('SKIP')
+
+pkgver() {
+    cd WALLY
+    git describe --long --tags | sed 's/^v//; s/\([^-]*-g\)/r\1/; s/-/./g'
+}
+
+build() {
+    cd WALLY
+    cargo build --release --locked
+}
+
+check() {
+    cd WALLY
+    cargo test --release --locked
+}
+
+package() {
+    cd WALLY
+    install -Dm755 target/release/wally "$pkgdir/usr/bin/wally"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/wally/README.md"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/wally/LICENSE"
+}

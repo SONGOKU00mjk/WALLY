@@ -1,0 +1,40 @@
+# Maintainer: SONGOKU00mjk <SONGOKU00mjk@users.noreply.github.com>
+# AUR page: https://aur.archlinux.org/packages/wally
+#
+# This package builds the DEFAULT feature set — exactly what install.sh
+# builds: AVIF decoding is on (pure-Rust rav1d), which needs nasm on
+# x86_64 for the SIMD assembly. aarch64 compiles the same crate without
+# needing nasm's arch-specific output (rav1d takes the pure-Rust path
+# there), so the makedepend is harmless on that architecture.
+
+pkgname=wally
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Minimal Wayland wallpaper setter with first-class GIF and animated WebP support"
+arch=('x86_64' 'aarch64')
+url="https://github.com/SONGOKU00mjk/WALLY"
+license=('GPL-3.0-or-later')
+depends=('glibc' 'gcc-libs')
+makedepends=('cargo' 'git' 'nasm')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
+# Replace with the real checksum when the tag exists; updpkgsums does it.
+sha256sums=('SKIP')
+options=('!lto') # cargo already runs LTO via the profile; no extra flag
+
+build() {
+    cd "WALLY-$pkgver"
+    cargo build --release --locked
+}
+
+check() {
+    cd "WALLY-$pkgver"
+    cargo test --release --locked
+}
+
+package() {
+    cd "WALLY-$pkgver"
+    install -Dm755 target/release/wally "$pkgdir/usr/bin/wally"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/wally/README.md"
+    install -Dm644 CHANGELOG.md "$pkgdir/usr/share/doc/wally/CHANGELOG.md"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/wally/LICENSE"
+}

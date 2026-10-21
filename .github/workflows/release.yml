@@ -1,0 +1,119 @@
+name: release
+
+# Hand-rolled on purpose — why not cargo-dist:
+#
+#   cargo-dist is a release-orchestration framework: `dist init` generates
+#   its own workflow plus its own shell/powershell installers and its own
+#   artifact naming/layout. WALLY is Linux-only, two targets, one binary,
+#   and already ships a purpose-built installer (install.sh) whose asset
+#   contract this workflow implements. Under cargo-dist we would either run
+#   two competing one-line installers in the README (exactly the confusion
+#   this repo is trying to remove) or bend cargo-dist's naming to match
+#   install.sh anyway — overhead with no payoff for a project whose whole
+#   identity is "one small binary, no extra moving parts".
+#
+# Asset contract (keep in sync with install.sh — it fetches these names):
+#
+#   wally-<triple>.tar.gz    <triple> = x86_64-unknown-linux-gnu |
+#                                       aarch64-unknown-linux-gnu
+#   SHA256SUMS               lines: "<sha256>  wally-<triple>.tar.gz"
+#
+# Why no musl: it builds cleanly (0.5.x shipped static-pie musl), but musl
+# mallocng keeps freed multi-MB buffers resident — measured in 0.6.0 —
+# which regresses the memory identity (RSS handback) that glibc + the
+# pinned M_MMAP_THRESHOLD give us. glibc binaries link only libc+libgcc.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Dynamically linked glibc builds (see musl note above). The
+        # x86_64 job doubles as the test runner; aarch64 cross-links via
+        # the distro cross toolchain — the code is pure Rust, no
+        # libwayland, no pkg-config, no C sources to compile.
+        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # The AVIF decoder's SIMD assembly needs nasm on x86_64 only;
+      # aarch64 takes the pure-Rust path.
+      - name: Install nasm
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install -y nasm
+
+      # Cross linker for the aarch64 glibc target (gnu targets link
+      # against the system libc, unlike musl's bundled CRT), plus qemu to
+      # smoke-test the packaged binary from the other architecture.
+      - name: Install aarch64 cross toolchain
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu qemu-user-static
+
+      - name: Test (native)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo test --release --locked
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          tar czf dist/wally-${{ matrix.target }}.tar.gz \
+            -C target/${{ matrix.target }}/release wally
+
+      # The tarball must contain a binary that runs, not just links.
+      - name: Smoke test the packaged binary
+        run: |
+          mkdir smoke && cd smoke
+          tar xzf ../dist/wally-${{ matrix.target }}.tar.gz
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            # qemu -L prefixes the ELF interpreter path; the cross libc
+            # package installs it at /usr/aarch64-linux-gnu/lib/.
+            qemu-aarch64-static -L /usr/aarch64-linux-gnu ./wally --version
+          else
+            ./wally --version
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wally-${{ matrix.target }}
+          path: dist/wally-${{ matrix.target }}.tar.gz
+
+  release:
+    name: publish
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          sha256sum wally-*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+          # Verify our own manifest parses and matches before publishing.
+          sha256sum -c SHA256SUMS
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            wally-*.tar.gz
+            SHA256SUMS
+          generate_release_notes: true

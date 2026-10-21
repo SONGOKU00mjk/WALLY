@@ -1,0 +1,23 @@
+version: 2
+updates:
+  # Grouped weekly cargo updates: one PR, review once. Carefully taken
+  # dependency updates matter more than many dependency PRs — wally's
+  # value is a small, auditable tree.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      cargo-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    # The GitHub Actions in .github/workflows get the same treatment.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns:
+          - "*"

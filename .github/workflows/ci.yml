@@ -1,0 +1,90 @@
+name: ci
+
+# Every push and PR runs the full working agreement: fmt, clippy with
+# warnings as errors, the test suite, and a release build — in all four
+# feature shapes. The slim --no-default-features binary (no AVIF, no
+# nasm needed) is a documented product, so it must be built and tested,
+# not assumed.
+#
+# The tag-triggered release pipeline lives in release.yml.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    name: formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --check
+
+  features:
+    name: ${{ matrix.features }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - features: "default"
+            args: ""
+            nasm: true
+          - features: "no-default"
+            args: "--no-default-features"
+            nasm: false
+          - features: "default+jxl"
+            args: "--features jxl"
+            nasm: true
+          - features: "no-default+jxl"
+            args: "--no-default-features --features jxl"
+            nasm: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      # The AVIF decoder's SIMD assembly needs nasm on x86_64; the
+      # no-default shapes exist partly to avoid that dependency.
+      - name: Install nasm
+        if: matrix.nasm
+        run: sudo apt-get update && sudo apt-get install -y nasm
+
+      - name: Clippy (${{ matrix.features }})
+        run: cargo clippy --all-targets ${{ matrix.args }} -- -D warnings
+
+      - name: Test (${{ matrix.features }})
+        run: cargo test ${{ matrix.args }}
+
+      - name: Build (${{ matrix.features }})
+        run: cargo build --release ${{ matrix.args }}
+
+  # The installer is shell; a syntax error would break the project's
+  # front door. sh -n is the no-dependency baseline (shellcheck when
+  # available, non-fatal on absence).
+  installer:
+    name: install.sh syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sh -n install.sh
+      - name: shellcheck
+        run: |
+          if command -v shellcheck >/dev/null; then
+            shellcheck -s sh install.sh
+          else
+            sudo apt-get update && sudo apt-get install -y shellcheck &&
+              shellcheck -s sh install.sh
+          fi
