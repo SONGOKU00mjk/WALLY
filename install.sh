@@ -563,6 +563,16 @@ remove_shadowing() {
 # Install the native package from the release. Unlike the plain binary
 # install this is, by definition, a system-package operation: it writes to
 # /usr and therefore needs root, and it cannot honour --user or PREFIX.
+# Hand a verified package file to the distribution's package manager.
+install_native_package() { # $1 package manager, $2 file
+    case "$1" in
+        apt) as_root apt-get install -y "$2" ;;
+        dnf) as_root dnf install -y "$2" ;;
+        pacman) as_root pacman -U --noconfirm "$2" ;;
+        *) return 1 ;;
+    esac
+}
+
 install_package() {
     if [ "${user_install:-}" = "1" ]; then
         die "--package installs a system package and cannot be combined with --user"
@@ -605,12 +615,13 @@ install_package() {
     verify_asset "$scratch" "$asset" "$tag"
 
     remove_shadowing
-    case "$pm" in
-        apt) as_root apt-get install -y "$scratch/$asset" ;;
-        dnf) as_root dnf install -y "$scratch/$asset" ;;
-        pacman) as_root pacman -U --noconfirm "$scratch/$asset" ;;
-    esac
+    if ! install_native_package "$pm" "$scratch/$asset"; then
+        die "installing $asset failed"
+    fi
     log "installed the native package: $asset"
+    if command -v wally >/dev/null 2>&1; then
+        log "wally on PATH is now $(wally --version 2>/dev/null)"
+    fi
     case ":$PATH:" in
         *:/usr/bin:*) ;;
         *) log "note: /usr/bin is not in PATH — add it to use wally" ;;
