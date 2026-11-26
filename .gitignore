@@ -8,3 +8,10 @@
 /.test-state
 /.run
 /target-msrv
+
+# Package-validation and mock-release scratch space
+/.pkgtest
+/.mock
+/.pkgsrc
+/.dist
+/.inst-*
