@@ -130,6 +130,8 @@ build_rpm() {
         --define "wally_binary $binary" \
         --define "wally_root $root" \
         --define "debug_package %{nil}" \
+        --define "_build_arch $arch" \
+        --define "_host_cpu $arch" \
         --target "$arch" >"$work/rpmbuild.log" 2>&1; then
         cat "$work/rpmbuild.log" >&2
         die "rpmbuild failed"
