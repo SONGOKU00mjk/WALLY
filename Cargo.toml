@@ -1,12 +1,11 @@
 [package]
 name = "wally"
-version = "1.0.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.98"
 description = "A minimal Wayland wallpaper setter with GIF and animated WebP support"
 license = "GPL-3.0-or-later"
-repository = "https://github.com/SONGOKU00mjk/WALLY"
-homepage = "https://github.com/SONGOKU00mjk/WALLY"
+repository = "https://github.com/SONGOKU00mjk/wally"
 readme = "README.md"
 keywords = ["wayland", "wallpaper", "swaybg", "layer-shell", "gif"]
 categories = ["command-line-utilities", "graphics"]

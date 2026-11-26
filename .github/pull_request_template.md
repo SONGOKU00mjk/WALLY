@@ -1,6 +1,6 @@
 # Pull request
 
-Thank you for the patch. WALLY has a few non-negotiables — this checklist
+Thank you for the patch. wally has a few non-negotiables — this checklist
 exists so reviews are short. See CONTRIBUTING.md for the details.
 
 ## What does this PR change?

@@ -5,11 +5,11 @@
 #
 # Copy-paste install (nothing else needed — the script does the rest):
 #
-#   curl -fsSL https://raw.githubusercontent.com/SONGOKU00mjk/WALLY/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/SONGOKU00mjk/wally/main/install.sh | sh
 #
 # Or clone first and run the script from inside the checkout:
 #
-#   git clone https://github.com/SONGOKU00mjk/WALLY.git && cd WALLY && ./install.sh
+#   git clone https://github.com/SONGOKU00mjk/wally.git && cd wally && ./install.sh
 #
 #   ./install.sh               prebuilt binary if available, else build from source
 #   ./install.sh --user        install for the current user only (~/.local), never root
@@ -20,7 +20,7 @@
 #   ./install.sh --check       report what this machine has
 #   ./install.sh --uninstall   remove every installed copy of wally
 #   PREFIX=/opt/wally ./install.sh ...    choose the install prefix
-#   WALLY_REF=v1.0.0 ./install.sh ...     install that tag/branch instead of the latest release
+#   WALLY_REF=v0.2.0 ./install.sh ...     install that tag/branch instead of the latest release
 #
 # The prebuilt path downloads wally-<triple>.tar.gz from the release whose
 # tag matches WALLY_REF (or the latest release), verifies it against the
@@ -43,14 +43,14 @@
 
 set -eu
 
-REPO_URL="${WALLY_REPO:-https://github.com/SONGOKU00mjk/WALLY.git}"
-REPO_WEB="https://github.com/SONGOKU00mjk/WALLY"
+REPO_URL="${WALLY_REPO:-https://github.com/SONGOKU00mjk/wally.git}"
+REPO_WEB="https://github.com/SONGOKU00mjk/wally"
 # Base URL release assets are fetched from. Override for mirrors or tests:
 #   WALLY_RELEASE_URL=https://mirror.example/wally/releases/download
 # Assets live at $WALLY_RELEASE_URL/<tag>/wally-<triple>.tar.gz (+ SHA256SUMS).
 # When set without WALLY_REF the literal tag "latest" is used, so a mirror
 # can publish a /download/latest/ directory.
-RELEASE_URL="${WALLY_RELEASE_URL:-https://github.com/SONGOKU00mjk/WALLY/releases/download}"
+RELEASE_URL="${WALLY_RELEASE_URL:-https://github.com/SONGOKU00mjk/wally/releases/download}"
 MSRV="1.98" # avif-decode (rav1d) needs this; everything else is far older
 
 log() { printf '%s\n' "install.sh: $*"; }
@@ -121,7 +121,7 @@ Environment:
   WALLY_RELEASE_URL=URL  fetch release assets from URL instead of GitHub
 
 The one-line install without cloning first:
-  curl -fsSL https://raw.githubusercontent.com/SONGOKU00mjk/WALLY/main/install.sh | sh
+  curl -fsSL https://raw.githubusercontent.com/SONGOKU00mjk/wally/main/install.sh | sh
 EOF
 }
 
@@ -236,8 +236,11 @@ install_packages() { # $1: space-separated package names (may be empty)
             ;;
         pacman)
             log "installing with pacman:$1"
+            # -S without -y: a partial upgrade (-Sy) can break an Arch
+            # system; the package database refresh is only needed when the
+            # package is genuinely missing.
             # shellcheck disable=SC2086
-            as_root pacman -Sy --needed --noconfirm $1
+            as_root pacman -S --needed --noconfirm $1
             ;;
         zypper)
             log "installing with zypper:$1"
@@ -295,12 +298,16 @@ pick_prefix() {
 # destination is not writable by the current user — so --user installs and
 # PREFIX= locations you own never ask for a password.
 place_wally() { # $1: source file, $2: cp or mv
-    if [ -w "$prefix/bin" ] || [ -w "$prefix" ] ||
-        { [ ! -e "$prefix" ] && [ -w "$(dirname "$prefix")" ]; }; then
-        mkdir -p "$prefix/bin"
+    # Create the directory first (with root when needed), then decide how
+    # to copy: testing writability of a directory that does not exist yet
+    # is how installers end up asking for a password unnecessarily — or
+    # failing under `set -e` after the mkdir.
+    if ! mkdir -p "$prefix/bin" 2>/dev/null; then
+        as_root mkdir -p "$prefix/bin"
+    fi
+    if [ -w "$prefix/bin" ]; then
         "$2" "$1" "$prefix/bin/wally"
     else
-        as_root mkdir -p "$prefix/bin"
         as_root "$2" "$1" "$prefix/bin/wally"
     fi
 }
@@ -350,7 +357,7 @@ fetch_source() {
         log "building from this checkout: $here"
     else
         scratch="$(mktemp -d "${TMPDIR:-/tmp}/wally-build.XXXXXX")"
-        SRC_DIR="$scratch/WALLY"
+        SRC_DIR="$scratch/wally"
         log "cloning $REPO_URL"
         git clone --depth 1 ${WALLY_REF:+"--branch=$WALLY_REF"} "$REPO_URL" "$SRC_DIR" ||
             die "git clone failed — check your internet connection and $REPO_URL"
@@ -432,10 +439,10 @@ try_prebuilt() {
     # (WALLY_RELEASE_URL set) serves its own "latest" directory.
     if [ -n "${WALLY_REF:-}" ]; then
         ver="$WALLY_REF"
-    elif [ "$RELEASE_URL" != "https://github.com/SONGOKU00mjk/WALLY/releases/download" ]; then
+    elif [ "$RELEASE_URL" != "https://github.com/SONGOKU00mjk/wally/releases/download" ]; then
         ver="latest"
     else
-        ver="$(curl -fsSL "https://api.github.com/repos/SONGOKU00mjk/WALLY/releases/latest" 2>/dev/null |
+        ver="$(curl -fsSL "https://api.github.com/repos/SONGOKU00mjk/wally/releases/latest" 2>/dev/null |
             sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)" || ver=""
         [ -n "$ver" ] || ver="latest"
     fi
@@ -462,7 +469,7 @@ try_prebuilt() {
     if curl -fsSL -o "$scratch/SHA256SUMS" "$RELEASE_URL/$ver/SHA256SUMS" 2>/dev/null ||
         wget -q -O "$scratch/SHA256SUMS" "$RELEASE_URL/$ver/SHA256SUMS" 2>/dev/null; then
         if have sha256sum; then
-            (cd "$scratch" && grep "wally-$t.tar.gz" SHA256SUMS | sha256sum -c -) || {
+            (cd "$scratch" && grep -F "wally-$t.tar.gz" SHA256SUMS | sha256sum -c -) || {
                 fail "checksum mismatch — not installing the downloaded binary"
                 return 1
             }

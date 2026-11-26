@@ -4,7 +4,7 @@ name: release
 #
 #   cargo-dist is a release-orchestration framework: `dist init` generates
 #   its own workflow plus its own shell/powershell installers and its own
-#   artifact naming/layout. WALLY is Linux-only, two targets, one binary,
+#   artifact naming/layout. wally is Linux-only, two targets, one binary,
 #   and already ships a purpose-built installer (install.sh) whose asset
 #   contract this workflow implements. Under cargo-dist we would either run
 #   two competing one-line installers in the README (exactly the confusion

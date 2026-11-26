@@ -1,7 +1,7 @@
-# Contributing to WALLY
+# Contributing to wally
 
 Thank you for wanting to make wally better. This document covers the
-project's ground rules and how to work on it. WALLY is deliberately small:
+project's ground rules and how to work on it. wally is deliberately small:
 one binary, no GUI toolkit, no heavyweight dependencies, a one-shot CLI that
 stays the default. Changes that grow the project without growing what it
 does for users are usually rejected.
@@ -27,7 +27,7 @@ cargo build --release                                    # the binary
 ```
 
 Every change must build in **all four feature shapes** — the slim
-`--no-default-features` binary (1.45 MB, no AVIF) is a documented product,
+`--no-default-features` binary (~1.9 MB, no AVIF) is a documented product,
 and the `jxl` feature must stay optional in both directions:
 
 ```sh
@@ -110,12 +110,12 @@ The repository's discoverability settings are reproducible with `gh`:
 
 ```sh
 # homepage + discussions
-gh repo edit SONGOKU00mjk/WALLY \
-  --homepage "https://github.com/SONGOKU00mjk/WALLY" \
+gh repo edit SONGOKU00mjk/wally \
+  --homepage "https://github.com/SONGOKU00mjk/wally" \
   --enable-discussions
 
 # topics (max 20; these are the curated set)
-gh repo edit SONGOKU00mjk/WALLY \
+gh repo edit SONGOKU00mjk/wally \
   --add-topic wayland --add-topic wallpaper --add-topic wallpaper-setter \
   --add-topic swaybg-alternative --add-topic animated-wallpaper \
   --add-topic gif --add-topic webp --add-topic layer-shell \

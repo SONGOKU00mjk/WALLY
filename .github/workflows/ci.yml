@@ -16,6 +16,12 @@ on:
 permissions:
   contents: read
 
+# A new push to the same branch cancels the previous run: the matrix is
+# wide (four feature shapes) and stale runs only burn runner minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 

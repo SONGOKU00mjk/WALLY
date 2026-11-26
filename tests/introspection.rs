@@ -9,7 +9,18 @@ use assert_cmd::Command;
 use predicates::str::contains;
 
 fn wally() -> Command {
-    Command::cargo_bin("wally").expect("wally binary builds")
+    let mut cmd = Command::cargo_bin("wally").expect("wally binary builds");
+    // The no-compositor behaviour is the point of these tests. A
+    // developer machine (or a CI runner with a headless compositor) must
+    // not turn them into false failures: scrub the Wayland environment,
+    // and keep the state file out of the real home directory.
+    cmd.env_remove("WAYLAND_DISPLAY")
+        .env_remove("XDG_RUNTIME_DIR")
+        .env(
+            "XDG_STATE_HOME",
+            std::env::temp_dir().join("wally-test-state"),
+        );
+    cmd
 }
 
 #[test]
@@ -103,4 +114,49 @@ fn dry_run_accepts_a_solid_color() {
         .assert()
         .success()
         .stdout(contains("solid #1e1e2e"));
+}
+
+#[test]
+fn query_json_is_a_machine_readable_array() {
+    let base = std::env::temp_dir().join(format!("wally-json-{}", std::process::id()));
+    let state_dir = base.join("wally");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    std::fs::write(
+        state_dir.join("state.conf"),
+        "# wally state\nDP-1\tfill\ttrue\t000000\timage\t/tmp/a b.png\n",
+    )
+    .unwrap();
+    wally()
+        .env("XDG_STATE_HOME", &base)
+        .args(["--query", "--json"])
+        .assert()
+        .success()
+        .stdout(predicates::str::starts_with("["))
+        .stdout(contains("\"output\":\"DP-1\""))
+        .stdout(contains("\"type\":\"image\""))
+        .stdout(contains("/tmp/a b.png"))
+        .stdout(contains("\"animate\":true"));
+    std::fs::remove_dir_all(&base).ok();
+}
+
+#[test]
+fn query_json_with_no_state_is_an_empty_array() {
+    let base = std::env::temp_dir().join(format!("wally-json-empty-{}", std::process::id()));
+    std::fs::create_dir_all(&base).unwrap();
+    wally()
+        .env("XDG_STATE_HOME", &base)
+        .args(["--query", "--json"])
+        .assert()
+        .success()
+        .stdout("[]\n");
+    std::fs::remove_dir_all(&base).ok();
+}
+
+#[test]
+fn json_is_rejected_outside_introspection() {
+    wally()
+        .args(["--json", "-i", "tests/fixtures/photo.png"])
+        .assert()
+        .failure()
+        .stderr(contains("--json applies to"));
 }

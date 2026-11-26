@@ -124,6 +124,13 @@ pub struct Config {
     /// Foreground rotation (`--rotate DIR --interval DUR`): cycle the
     /// images in DIR, one every interval, through the ordinary path.
     pub rotate: Option<(PathBuf, u64)>,
+    /// Animation playback rate in percent (100 = the file's own timing).
+    /// Applied when a GIF/WebP source opens, so `--speed 2` plays every
+    /// frame twice as fast and `--speed 0.5` at half speed.
+    pub speed_pct: u16,
+    /// `--shuffle`: visit `--rotate` files in random order instead of
+    /// sorted filename order. Every file is shown once per cycle.
+    pub shuffle: bool,
 }
 
 /// Parse a `--interval` duration: `"90"`, `"30s"`, `"30m"`, `"2h"`,
@@ -201,6 +208,22 @@ fn parse_interval_secs(total: u64, original: &str) -> Result<u64> {
     Ok(total)
 }
 
+/// Parse `--speed`: a playback multiplier between 0.1x and 10x, stored as
+/// percent so a source key stays integer and comparable. `1`, `1.0` and
+/// `1x` are all accepted; anything outside the range cannot be a sane
+/// frame delay (10x already bottoms out at the 20 ms floor for 200 ms
+/// frames, 0.1x is a slideshow of stills).
+pub(crate) fn parse_speed(s: &str) -> Result<u16> {
+    let t = s.trim().trim_end_matches(['x', 'X']);
+    let factor: f64 = t
+        .parse()
+        .map_err(|_| anyhow::anyhow!("--speed expects a number like 1.5 or 2, got `{s}`"))?;
+    if !factor.is_finite() || factor < 0.1 || factor > 10.0 {
+        bail!("--speed must be between 0.1 and 10, got `{s}`");
+    }
+    Ok((factor * 100.0).round() as u16)
+}
+
 impl Config {
     pub fn for_output(&self, name: Option<&str>) -> &OutputCfg {
         match name {
@@ -221,9 +244,13 @@ pub enum Parsed {
     Help(String),
     Version,
     /// Enumerate connected outputs and exit; no surfaces are created.
-    ListOutputs,
+    ListOutputs {
+        json: bool,
+    },
     /// Print what wally last set, from the state file.
-    Query,
+    Query {
+        json: bool,
+    },
     /// Re-apply what wally last set.
     Restore,
     /// A daemon subcommand: `wally set|query|restore|stop ...`.
@@ -261,11 +288,19 @@ OPTIONS:
     --scale-force <N>         Render at this integer buffer scale instead of
                               the output's reported scale (fractional-scale
                               escape hatch)
-    --rotate <DIR>            Foreground-only: cycle the images in DIR.
-                              Reuses the ordinary paint path; not a
-                              wallpaper manager (no schedules, no history)
+    --rotate <DIR>            Foreground-only: show the images in DIR and
+                              advance every interval. Starts with the first
+                              image at once; reuses the ordinary paint path
+                              (not a wallpaper manager: no schedules, no
+                              history)
     --interval <DUR>          Rotation period: 30m, 90s, 2h, 1h30m
                               [default: 30m, with --rotate only]
+    --shuffle                 With --rotate: random order instead of sorted
+                              filenames (every file is shown once per cycle)
+    --speed <FACTOR>          Animation speed multiplier, 0.1 to 10
+                              [default: 1 = native timing]
+    --json                    Machine-readable output for --list-outputs and
+                              --query
     --list-outputs            Print each connected output (name, resolution,
                               scale, transform), one per line, and exit
     --dry-run                 Validate the images, print the decoded
@@ -375,6 +410,10 @@ pub(crate) fn parse_from<I: IntoIterator<Item = String>>(args: I) -> Result<Pars
     let mut scale_force: Option<u32> = None;
     let mut rotate: Option<PathBuf> = None;
     let mut interval: Option<u64> = None;
+    let mut shuffle = false;
+    let mut speed_pct: u16 = 100;
+    let mut list_outputs = false;
+    let mut json = false;
 
     while let Some(arg) = args.next() {
         // The group this option mutates, creating the target entry lazily.
@@ -406,7 +445,13 @@ pub(crate) fn parse_from<I: IntoIterator<Item = String>>(args: I) -> Result<Pars
                 )));
             }
             "-v" | "--version" => return Ok(Parsed::Version),
-            "--list-outputs" => return Ok(Parsed::ListOutputs),
+            "--list-outputs" => list_outputs = true,
+            "--json" => json = true,
+            "--shuffle" => shuffle = true,
+            "--speed" => {
+                let v = value("--speed")?;
+                speed_pct = parse_speed(&v)?;
+            }
             "--dry-run" => dry_run = true,
             "--replace" => replace = true,
             "--restore" => restore = true,
@@ -467,6 +512,9 @@ pub(crate) fn parse_from<I: IntoIterator<Item = String>>(args: I) -> Result<Pars
     if interval.is_some() && rotate.is_none() {
         bail!("--interval belongs to --rotate");
     }
+    if shuffle && rotate.is_none() {
+        bail!("--shuffle belongs to --rotate");
+    }
     if rotate.is_some() && (!default.image.is_none() || !default.color.is_none()) {
         bail!("--rotate picks the images itself — pass -m/-o options for the look, not -i/-c");
     }
@@ -488,6 +536,8 @@ pub(crate) fn parse_from<I: IntoIterator<Item = String>>(args: I) -> Result<Pars
             // --interval belongs to --rotate; the default is 30 minutes.
             (dir, interval.unwrap_or(1800))
         }),
+        speed_pct,
+        shuffle,
     };
     if query && restore {
         bail!("pass either --query or --restore, not both");
@@ -500,12 +550,23 @@ pub(crate) fn parse_from<I: IntoIterator<Item = String>>(args: I) -> Result<Pars
             );
         }
         return Ok(if query {
-            Parsed::Query
+            Parsed::Query { json }
         } else {
             Parsed::Restore
         });
     }
-    if config.default.is_empty() && config.targets.iter().all(|(_, c)| c.is_empty()) {
+    if list_outputs {
+        return Ok(Parsed::ListOutputs { json });
+    }
+    if json {
+        bail!("--json applies to --list-outputs and --query");
+    }
+    // A rotation directory is a complete configuration on its own: the
+    // first image is picked and shown at startup (see `wayland::run`).
+    if config.rotate.is_none()
+        && config.default.is_empty()
+        && config.targets.iter().all(|(_, c)| c.is_empty())
+    {
         bail!("nothing to show — pass an image path, or `-c '#RRGGBB'` for a solid color");
     }
     if dry_run {
@@ -690,7 +751,7 @@ mod tests {
     fn query_and_restore_are_standalone_actions() {
         assert!(matches!(
             parse_from(["--query".to_string()]),
-            Ok(Parsed::Query)
+            Ok(Parsed::Query { json: false })
         ));
         assert!(matches!(
             parse_from(["--restore".to_string()]),
@@ -712,7 +773,7 @@ mod tests {
     fn list_outputs_is_a_standalone_action() {
         assert!(matches!(
             parse_from(["--list-outputs".to_string()]),
-            Ok(Parsed::ListOutputs)
+            Ok(Parsed::ListOutputs { json: false })
         ));
     }
 
@@ -739,5 +800,53 @@ mod tests {
     #[test]
     fn dry_run_still_rejects_an_empty_config() {
         assert!(parse_from(["--dry-run".to_string()]).is_err());
+    }
+
+    #[test]
+    fn speed_parses_and_is_bounded() {
+        assert_eq!(parse_speed("1").unwrap(), 100);
+        assert_eq!(parse_speed("1.5").unwrap(), 150);
+        assert_eq!(parse_speed("2x").unwrap(), 200);
+        assert_eq!(parse_speed("0.25").unwrap(), 25);
+        assert!(parse_speed("0").is_err());
+        assert!(parse_speed("0.05").is_err());
+        assert!(parse_speed("11").is_err());
+        assert!(parse_speed("fast").is_err());
+        assert_eq!(parse_args(&["-i", "a.png"]).unwrap().speed_pct, 100);
+        assert_eq!(
+            parse_args(&["--speed", "0.5", "-i", "a.png"])
+                .unwrap()
+                .speed_pct,
+            50
+        );
+    }
+
+    #[test]
+    fn rotate_is_a_complete_configuration_on_its_own() {
+        let dir = std::env::temp_dir().join(format!("wally-rot-cli-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = parse_args(&["--rotate", dir.to_str().unwrap()]).unwrap();
+        assert!(cfg.rotate.is_some());
+        assert!(cfg.default.image.is_none());
+        assert!(!cfg.shuffle);
+        // --shuffle belongs to --rotate, and only to it.
+        assert!(parse_args(&["--shuffle", "-i", "a.png"]).is_err());
+        let cfg = parse_args(&["--rotate", dir.to_str().unwrap(), "--shuffle"]).unwrap();
+        assert!(cfg.shuffle);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn json_is_only_for_introspection() {
+        assert!(parse_args(&["--json", "-i", "a.png"]).is_err());
+        assert!(parse_from(["--json".to_string(), "--dry-run".to_string()]).is_err());
+        assert!(matches!(
+            parse_from(["--json".to_string(), "--query".to_string()]),
+            Ok(Parsed::Query { json: true })
+        ));
+        assert!(matches!(
+            parse_from(["--list-outputs".to_string(), "--json".to_string()]),
+            Ok(Parsed::ListOutputs { json: true })
+        ));
     }
 }

@@ -1,3 +1,10 @@
 /target
 /dist-ci-sim
 /smoke-ci-sim
+
+# Local build/verification scratch space (never part of the project)
+/.cargo
+/.tools
+/.test-state
+/.run
+/target-msrv

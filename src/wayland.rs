@@ -78,6 +78,9 @@ const GATE_GRACE: Duration = Duration::from_millis(150);
 /// (path, animate) pair.
 struct SourceState {
     key: (PathBuf, bool),
+    /// Playback rate the animation was opened with (percent). Part of the
+    /// source's identity: a --speed change must reopen, not reuse.
+    speed_pct: u16,
     source: Source,
     /// Last failed paint attempt; retries are throttled so a broken file
     /// can neither spam the log nor spin the decoder every tick.
@@ -180,9 +183,71 @@ pub struct App {
 struct RotateState {
     dir: PathBuf,
     interval: Duration,
+    shuffle: bool,
     files: Vec<PathBuf>,
     next_idx: usize,
     due: Instant,
+}
+
+impl RotateState {
+    /// Load the directory and shuffle it if asked. Fails when there is
+    /// nothing to show: a rotation with no images is a configuration
+    /// error, and finding out at startup beats finding out in 30 minutes.
+    fn new(dir: PathBuf, interval: Duration, shuffle: bool) -> Result<Self> {
+        let mut files = rotation_files(&dir);
+        if files.is_empty() {
+            bail!("--rotate: no supported image files in `{}`", dir.display());
+        }
+        if shuffle {
+            shuffle_files(&mut files);
+        }
+        Ok(Self {
+            dir,
+            interval,
+            shuffle,
+            files,
+            next_idx: 0,
+            due: Instant::now() + interval,
+        })
+    }
+
+    /// The next image in the cycle. The directory is re-read when a cycle
+    /// ends, so files added or removed while wally runs are picked up;
+    /// a shuffle reseeds the order for each new cycle.
+    fn next_file(&mut self) -> Option<PathBuf> {
+        if self.next_idx >= self.files.len() {
+            self.files = rotation_files(&self.dir);
+            if self.shuffle {
+                shuffle_files(&mut self.files);
+            }
+            self.next_idx = 0;
+        }
+        let file = self.files.get(self.next_idx).cloned();
+        self.next_idx += 1;
+        file
+    }
+}
+
+/// Fisher-Yates over the file list, seeded from the clock and pid: no
+/// dependency, no reproducibility guarantee (nothing about a wallpaper
+/// rotation needs one).
+fn shuffle_files(files: &mut [PathBuf]) {
+    let mut state = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x9e37_79b9_7f4a_7c15)
+        ^ u64::from(std::process::id());
+    let mut next = move || {
+        // xorshift64*
+        state ^= state >> 12;
+        state ^= state << 25;
+        state ^= state >> 27;
+        state.wrapping_mul(0x2545_f491_4f6c_dd1d)
+    };
+    for i in (1..files.len()).rev() {
+        let j = (next() % (i as u64 + 1)) as usize;
+        files.swap(i, j);
+    }
 }
 
 /// Image files in a rotation directory, sorted for a deterministic cycle.
@@ -199,6 +264,11 @@ fn rotation_files(dir: &Path) -> Vec<PathBuf> {
         .map(|e| e.path())
         .filter(|p| {
             p.is_file()
+                && !p
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.starts_with('.'))
+                    .unwrap_or(true)
                 && p.extension()
                     .and_then(|e| e.to_str())
                     .map(|e| EXTS.contains(&e.to_ascii_lowercase().as_str()))
@@ -271,6 +341,53 @@ mod tests {
         }
     }
 
+    fn rotation_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("wally-rot-{}-{tag}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn rotation_cycles_sorted_images_and_rescans_each_cycle() {
+        let dir = rotation_dir("cycle");
+        for name in ["b.jpg", "a.png", "notes.txt", ".hidden.png"] {
+            std::fs::write(dir.join(name), b"").unwrap();
+        }
+        // Dotfiles are not wallpapers; .png but hidden would be a surprise.
+        let mut rot =
+            RotateState::new(dir.clone(), Duration::from_secs(30), false).expect("dir has images");
+        assert_eq!(rot.next_file().unwrap(), dir.join("a.png"));
+        assert_eq!(rot.next_file().unwrap(), dir.join("b.jpg"));
+        // Cycle wrapped: a file added meanwhile is picked up on the rescan.
+        std::fs::write(dir.join("c.png"), b"").unwrap();
+        assert_eq!(rot.next_file().unwrap(), dir.join("a.png"));
+        assert_eq!(rot.next_file().unwrap(), dir.join("b.jpg"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rotation_without_images_fails_at_startup() {
+        let dir = rotation_dir("empty");
+        let err = RotateState::new(dir.clone(), Duration::from_secs(5), false)
+            .err()
+            .expect("an empty rotation directory is a configuration error");
+        assert!(format!("{err:#}").contains("no supported image files"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn shuffle_keeps_every_file_exactly_once() {
+        let mut files: Vec<PathBuf> = (0..64)
+            .map(|i| PathBuf::from(format!("{i:02}.png")))
+            .collect();
+        let original = files.clone();
+        shuffle_files(&mut files);
+        files.sort();
+        let mut expected = original;
+        expected.sort();
+        assert_eq!(files, expected, "a shuffle must be a permutation");
+    }
+
     #[test]
     fn source_keys_are_deduplicated_per_animate_flag() {
         let config = Config {
@@ -317,6 +434,7 @@ mod tests {
         let source = Source::open(&path, false).unwrap();
         let mut st = SourceState {
             key: (path, false),
+            speed_pct: 100,
             source,
             last_error: None,
             host: None,
@@ -373,6 +491,7 @@ mod tests {
         let source = Source::open(&tmp, false).unwrap();
         let mut st = SourceState {
             key: (tmp.clone(), false),
+            speed_pct: 100,
             source,
             last_error: None,
             host: None,
@@ -446,11 +565,11 @@ mod tests {
 /// Decode every distinct (path, animate) pair in parallel; the first
 /// failure wins. Shared by the one-shot run, `--restore` and the
 /// daemon's `set`.
-fn open_sources(keys: &[(PathBuf, bool)]) -> Result<Vec<SourceState>> {
+fn open_sources(keys: &[(PathBuf, bool)], speed_pct: u16) -> Result<Vec<SourceState>> {
     std::thread::scope(|scope| -> Result<Vec<SourceState>> {
         let opened: Vec<_> = keys
             .iter()
-            .map(|k| scope.spawn(|| Source::open(&k.0, k.1)))
+            .map(|k| scope.spawn(|| Source::open_with_speed(&k.0, k.1, speed_pct)))
             .collect();
         let mut out = Vec::with_capacity(keys.len());
         let mut first_error = None;
@@ -462,6 +581,7 @@ fn open_sources(keys: &[(PathBuf, bool)]) -> Result<Vec<SourceState>> {
             match source {
                 Ok(source) => out.push(SourceState {
                     key: key.clone(),
+                    speed_pct,
                     source,
                     last_error: None,
                     host: None,
@@ -480,11 +600,23 @@ fn open_sources(keys: &[(PathBuf, bool)]) -> Result<Vec<SourceState>> {
     })
 }
 
-pub fn run(config: Config) -> Result<()> {
-    // Fail fast on unreadable/broken images before touching the
-    // compositor — distinct images decode in parallel.
+pub fn run(mut config: Config) -> Result<()> {
+    // --rotate: choose and show the first image now. Waiting a whole
+    // interval before the first paint is not a feature; it is a blank
+    // background for half an hour.
+    let mut rotate = match config.rotate.clone() {
+        Some((dir, secs)) => {
+            let mut state = RotateState::new(dir, Duration::from_secs(secs), config.shuffle)?;
+            if let Some(first) = state.next_file() {
+                config.default.image = Some(first);
+            }
+            Some(state)
+        }
+        None => None,
+    };
+
     let keys = source_keys(&config);
-    let sources = open_sources(&keys)?;
+    let sources = open_sources(&keys, config.speed_pct)?;
 
     let conn = Connection::connect_to_env()
         .context("could not connect to a Wayland compositor — is WAYLAND_DISPLAY set?")?;
@@ -495,13 +627,11 @@ pub fn run(config: Config) -> Result<()> {
     let transition = config
         .transition
         .map(|(kind, ms)| (kind, Instant::now(), Duration::from_millis(ms)));
-    let rotate = config.rotate.as_ref().map(|(dir, secs)| RotateState {
-        dir: dir.clone(),
-        interval: Duration::from_secs(*secs),
-        files: Vec::new(),
-        next_idx: 0,
-        due: Instant::now() + Duration::from_secs(*secs),
-    });
+    if let Some(rot) = &mut rotate {
+        // The first image is on screen now; the next change is one full
+        // interval away.
+        rot.due = Instant::now() + rot.interval;
+    }
     let mut app = App {
         config,
         compositor: None,
@@ -895,7 +1025,7 @@ impl App {
         qh: &QueueHandle<Self>,
     ) -> Result<usize> {
         let new_keys = source_keys(&config);
-        let new_sources = open_sources(&new_keys)?;
+        let new_sources = open_sources(&new_keys, config.speed_pct)?;
         let total_new = new_sources.len();
 
         // Destroy surfaces whose group is now empty — the same rule a
@@ -927,7 +1057,7 @@ impl App {
                         None => self
                             .sources
                             .iter()
-                            .position(|st| key_match(&st.key))
+                            .position(|st| key_match(&st.key) && st.speed_pct == config.speed_pct)
                             .map(|p| {
                                 old_kept[p] = true;
                                 total_new + p
@@ -948,6 +1078,7 @@ impl App {
                     &mut self.sources[p],
                     SourceState {
                         key: (PathBuf::new(), false),
+                        speed_pct: 100,
                         source: Source::Static {
                             path: PathBuf::new(),
                             decoded: None,
@@ -988,6 +1119,10 @@ impl App {
         }
 
         self.sources = merged;
+        // The new configuration is now the live one: outputs plugged in
+        // later, and a later --rotate step, must see it, not the config
+        // the process started with.
+        self.config = config;
         self.recorded = false; // the new configuration becomes the state
         let shown = self.surfaces.len();
         self.tick(qh); // paint the new configuration right away
@@ -1386,11 +1521,7 @@ impl App {
             if !self.rotating && now >= rot.due {
                 self.rotating = true;
                 rot.due = now + rot.interval;
-                if rot.files.len() < 2 {
-                    rot.files = rotation_files(&rot.dir);
-                }
-                rot.next_idx += 1;
-                let result = match rot.files.get((rot.next_idx - 1) % rot.files.len().max(1)) {
+                let result = match rot.next_file() {
                     Some(file) => {
                         let mut cfg = self.config.clone();
                         cfg.default.image = Some(file.clone());
@@ -1401,7 +1532,10 @@ impl App {
                         }
                         self.apply_config(cfg, qh).map(|_| ())
                     }
-                    None => Err(anyhow::anyhow!("no image files in `{}`", rot.dir.display())),
+                    None => Err(anyhow::anyhow!(
+                        "--rotate: no supported image files in `{}`",
+                        rot.dir.display()
+                    )),
                 };
                 if let Err(e) = result {
                     eprintln!("wally: rotation skipped: {e:#}");
@@ -1614,6 +1748,25 @@ impl App {
         self.config.scale_force.unwrap_or(output_scale).max(1)
     }
 
+    /// The drawing settings and source index an output name resolves to.
+    /// Shared by surface creation and by the late-name path: a compositor
+    /// may send wl_output.done before wl_output.name, so the group an
+    /// output belongs to can become known only after its surface exists.
+    fn resolve_group(&self, name: Option<&str>) -> (Look, Option<usize>) {
+        let cfg = self.config.for_output(name);
+        let look = Look {
+            mode: cfg.mode,
+            background: cfg.background,
+            color: cfg.color,
+        };
+        let source = cfg.image.as_ref().and_then(|path| {
+            self.sources.iter().position(|s| {
+                s.key.0 == *path && s.key.1 == cfg.animate && s.speed_pct == self.config.speed_pct
+            })
+        });
+        (look, source)
+    }
+
     fn create_surface(&mut self, output: &wl_output::WlOutput, scale: u32, qh: &QueueHandle<Self>) {
         let (Some(compositor), Some(shell)) = (&self.compositor, &self.shell) else {
             return; // globals not bound yet; ensure_all_surfaces runs again later
@@ -1635,16 +1788,7 @@ impl App {
             }
             return;
         }
-        let look = Look {
-            mode: cfg.mode,
-            background: cfg.background,
-            color: cfg.color,
-        };
-        let source = cfg.image.as_ref().and_then(|path| {
-            self.sources
-                .iter()
-                .position(|s| s.key.0 == *path && s.key.1 == cfg.animate)
-        });
+        let (look, source) = self.resolve_group(name.as_deref());
 
         let surface = compositor.create_surface(qh, ());
         let layer = shell.get_layer_surface(
@@ -2073,7 +2217,55 @@ impl Dispatch<wl_output::WlOutput, ()> for App {
             return;
         };
         match event {
-            wl_output::Event::Name { name } => state.outputs[idx].name = Some(name),
+            // The surface may already exist (wl_output.done can precede
+            // the name) and may have been created against the default
+            // group. Now that the name is known, re-resolve the group:
+            // per-output -i/-m options and --query/--restore depend on it.
+            wl_output::Event::Name { name } => {
+                state.outputs[idx].name = Some(name.clone());
+                let known = state.find_surface_by_output(proxy).is_some_and(|si| {
+                    state.surfaces[si].output_name.as_deref() == Some(name.as_str())
+                });
+                if known {
+                    // Nothing to do: this is a repeat name event.
+                } else if let Some(si) = state.find_surface_by_output(proxy) {
+                    let has_group = {
+                        let cfg = state.config.for_output(Some(&name));
+                        cfg.image.is_some() || cfg.color.is_some()
+                    };
+                    if has_group {
+                        let (look, source) = state.resolve_group(Some(&name));
+                        let s = &mut state.surfaces[si];
+                        s.output_name = Some(name.clone());
+                        s.look = look;
+                        s.source = source;
+                        s.dirty = true;
+                        // The screen now shows a different wallpaper than
+                        // the one recorded; record it again after painting.
+                        state.recorded = false;
+                    } else {
+                        // This output was skipped while unnamed (or was
+                        // showing the default group); with a name it
+                        // matches no configured group, so it must not show
+                        // anything.
+                        if state.surfaces[si].output_name.is_some() {
+                            state.destroy_surface(si);
+                        }
+                    }
+                } else {
+                    // No surface yet: either it never had one, or it was
+                    // skipped while the name was unknown. Create it now if
+                    // this name has a configuration.
+                    let has_group = {
+                        let cfg = state.config.for_output(Some(&name));
+                        cfg.image.is_some() || cfg.color.is_some()
+                    };
+                    if has_group {
+                        let scale = state.outputs[idx].scale;
+                        state.create_surface(proxy, scale, qh);
+                    }
+                }
+            }
             wl_output::Event::Scale { factor } => {
                 state.outputs[idx].scale = factor.max(1) as u32;
             }

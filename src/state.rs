@@ -163,6 +163,8 @@ pub fn to_config(entries: &[StateEntry]) -> Config {
         daemon: false,
         scale_force: None,
         rotate: None,
+        speed_pct: 100,
+        shuffle: false,
     }
 }
 

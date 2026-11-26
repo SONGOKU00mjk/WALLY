@@ -4,7 +4,7 @@ about: something wally should do that it does not
 labels: enhancement
 ---
 
-Thank you for the idea. WALLY is deliberately minimal, so the bar is: does
+Thank you for the idea. wally is deliberately minimal, so the bar is: does
 this fit "one small binary that sets wallpapers correctly"? Features that
 belong in a wallpaper manager (scheduling, per-workspace history, online
 galleries) are out of scope on purpose.
@@ -25,7 +25,7 @@ already do this? How does their approach feel?
 
 **Constraints a solution must respect**
 
-WALLY stays `wlr-layer-shell` + pure Rust with no GUI toolkit and no
+wally stays `wlr-layer-shell` + pure Rust with no GUI toolkit and no
 heavyweight dependencies, and the one-shot path stays the default. If your
 idea needs a toolkit or a system library, say so anyway — sometimes the
 honest answer is a documented "no".

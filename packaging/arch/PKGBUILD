@@ -8,11 +8,11 @@
 # there), so the makedepend is harmless on that architecture.
 
 pkgname=wally
-pkgver=1.0.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="Minimal Wayland wallpaper setter with first-class GIF and animated WebP support"
 arch=('x86_64' 'aarch64')
-url="https://github.com/SONGOKU00mjk/WALLY"
+url="https://github.com/SONGOKU00mjk/wally"
 license=('GPL-3.0-or-later')
 depends=('glibc' 'gcc-libs')
 makedepends=('cargo' 'git' 'nasm')
@@ -22,17 +22,17 @@ sha256sums=('SKIP')
 options=('!lto') # cargo already runs LTO via the profile; no extra flag
 
 build() {
-    cd "WALLY-$pkgver"
+    cd "wally-$pkgver"
     cargo build --release --locked
 }
 
 check() {
-    cd "WALLY-$pkgver"
+    cd "wally-$pkgver"
     cargo test --release --locked
 }
 
 package() {
-    cd "WALLY-$pkgver"
+    cd "wally-$pkgver"
     install -Dm755 target/release/wally "$pkgdir/usr/bin/wally"
     install -Dm644 README.md "$pkgdir/usr/share/doc/wally/README.md"
     install -Dm644 CHANGELOG.md "$pkgdir/usr/share/doc/wally/CHANGELOG.md"

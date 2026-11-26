@@ -39,37 +39,13 @@ fn main() {
     match cli::parse() {
         cli::Parsed::Help(text) => print!("{text}"),
         cli::Parsed::Version => println!("wally {}", env!("CARGO_PKG_VERSION")),
-        cli::Parsed::ListOutputs => {
-            if let Err(e) = cmd_list_outputs() {
+        cli::Parsed::ListOutputs { json } => {
+            if let Err(e) = cmd_list_outputs(json) {
                 eprintln!("wally: {e:#}");
                 std::process::exit(1);
             }
         }
-        cli::Parsed::Query => {
-            let entries = state::load();
-            if entries.is_empty() {
-                println!("wally: nothing recorded yet");
-                return;
-            }
-            for e in &entries {
-                let src = match &e.source {
-                    state::SourceSel::Image(p) => p.display().to_string(),
-                    state::SourceSel::Color(c) => {
-                        format!("solid #{:02x}{:02x}{:02x}", c[0], c[1], c[2])
-                    }
-                };
-                println!(
-                    "{}: {} ({}, bg #{:02x}{:02x}{:02x}{})",
-                    e.output,
-                    src,
-                    e.mode.name(),
-                    e.background[0],
-                    e.background[1],
-                    e.background[2],
-                    if e.animate { "" } else { ", first frame only" }
-                );
-            }
-        }
+        cli::Parsed::Query { json } => cmd_query(json),
         cli::Parsed::Restore => {
             let entries = state::load();
             if entries.is_empty() {
@@ -118,8 +94,27 @@ fn refresh_hz(mhz: u32) -> String {
     }
 }
 
-fn cmd_list_outputs() -> Result<()> {
+fn cmd_list_outputs(json: bool) -> Result<()> {
     let outputs = wayland::list_outputs()?;
+    if json {
+        let items: Vec<String> = outputs
+            .iter()
+            .map(|o| {
+                format!(
+                    "{{\"name\":{},\"width\":{},\"height\":{},\"refresh_hz\":{},\"scale\":{},\"transform\":{},\"rotated\":{}}}",
+                    json_string(&o.name),
+                    o.width,
+                    o.height,
+                    refresh_hz_number(o.refresh_mhz),
+                    o.scale,
+                    json_string(o.transform),
+                    o.rotated
+                )
+            })
+            .collect();
+        println!("[{}]", items.join(","));
+        return Ok(());
+    }
     for o in &outputs {
         println!(
             "{} {}x{}@{} scale {} transform {}",
@@ -132,6 +127,97 @@ fn cmd_list_outputs() -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// What wally last set, from the state file: human-readable lines, or a
+/// JSON array when --json was given (for bars, pickers and scripts).
+fn cmd_query(json: bool) {
+    let entries = state::load();
+    if entries.is_empty() {
+        if json {
+            println!("[]");
+        } else {
+            println!("wally: nothing recorded yet");
+        }
+        return;
+    }
+    if json {
+        let items: Vec<String> = entries
+            .iter()
+            .map(|e| {
+                let source = match &e.source {
+                    state::SourceSel::Image(p) => format!(
+                        "{{\"type\":\"image\",\"path\":{}}}",
+                        json_string(&p.display().to_string())
+                    ),
+                    state::SourceSel::Color(c) => format!(
+                        "{{\"type\":\"color\",\"hex\":\"#{:02x}{:02x}{:02x}\"}}",
+                        c[0], c[1], c[2]
+                    ),
+                };
+                format!(
+                    "{{\"output\":{},\"source\":{},\"mode\":{},\"background\":\"#{:02x}{:02x}{:02x}\",\"animate\":{}}}",
+                    json_string(&e.output),
+                    source,
+                    json_string(e.mode.name()),
+                    e.background[0],
+                    e.background[1],
+                    e.background[2],
+                    e.animate
+                )
+            })
+            .collect();
+        println!("[{}]", items.join(","));
+        return;
+    }
+    for e in &entries {
+        let src = match &e.source {
+            state::SourceSel::Image(p) => p.display().to_string(),
+            state::SourceSel::Color(c) => {
+                format!("solid #{:02x}{:02x}{:02x}", c[0], c[1], c[2])
+            }
+        };
+        println!(
+            "{}: {} ({}, bg #{:02x}{:02x}{:02x}{})",
+            e.output,
+            src,
+            e.mode.name(),
+            e.background[0],
+            e.background[1],
+            e.background[2],
+            if e.animate { "" } else { ", first frame only" }
+        );
+    }
+}
+
+/// A JSON string literal for arbitrary UTF-8 (paths, output names).
+fn json_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Refresh rate as a JSON number: 0 when unknown, otherwise Hz with at
+/// most two decimals (no trailing .00 noise).
+fn refresh_hz_number(mhz: u32) -> String {
+    if mhz == 0 {
+        return "null".to_string();
+    }
+    let hz = f64::from(mhz) / 1000.0;
+    let text = format!("{hz:.2}");
+    text.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 // ---------------------------------------------------------------- dry-run
@@ -296,4 +382,30 @@ fn cmd_dry_run(config: &Config) -> Result<()> {
         println!("  {}", scaling_decision(cfg, dims.0, dims.1, pw, ph));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_strings_escape_what_json_requires() {
+        assert_eq!(json_string("DP-1"), "\"DP-1\"");
+        assert_eq!(json_string("a\"b"), "\"a\\\"b\"");
+        assert_eq!(json_string("a\\b"), "\"a\\\\b\"");
+        assert_eq!(json_string("a\nb\tc"), "\"a\\nb\\tc\"");
+        // Control characters cannot appear raw in a JSON string.
+        assert_eq!(json_string("\u{1}"), "\"\\u0001\"");
+        // Unicode passes through unescaped — JSON is UTF-8.
+        assert_eq!(json_string("壁紙"), "\"壁紙\"");
+    }
+
+    #[test]
+    fn refresh_rates_are_json_numbers() {
+        assert_eq!(refresh_hz_number(0), "null");
+        assert_eq!(refresh_hz_number(180_000), "180");
+        assert_eq!(refresh_hz_number(59_940), "59.94");
+        assert_eq!(refresh_hz_number(59_950), "59.95");
+        assert_eq!(refresh_hz_number(100_500), "100.5");
+    }
 }

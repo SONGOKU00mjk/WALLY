@@ -35,7 +35,7 @@ bug in any one tool — it is the shape of the solution:
 
 ## How to avoid it with wally
 
-WALLY is a long-lived process: it sets the image and **stays**, driving
+wally is a long-lived process: it sets the image and **stays**, driving
 animations with frame callbacks and going fully idle for static images, so
 a wallpaper change does not need to kill anything at all when you keep one
 instance per configuration. When you do want a different image in the

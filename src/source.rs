@@ -32,6 +32,17 @@ fn normalize_delay(d: Duration) -> Duration {
     }
 }
 
+/// Apply a playback rate (percent, 100 = native) to an already normalized
+/// frame delay. The result is floored at 5 ms: 10x on a 20 ms frame would
+/// otherwise ask the compositor for 200 frames a second, which is not a
+/// speed anyone asked for — it is a busy loop. Floors and ceilings keep a
+/// hostile value (or a hostile file) from monopolizing the event loop.
+fn scale_delay(d: Duration, speed_pct: u16) -> Duration {
+    let pct = u64::from(speed_pct.clamp(10, 1000));
+    let ms = (d.as_millis() as u64).saturating_mul(100) / pct;
+    Duration::from_millis(ms.clamp(5, 3_600_000))
+}
+
 /// What to draw.
 pub enum Source {
     /// A still image. `decoded` is dropped after every output painted it
@@ -94,6 +105,9 @@ pub struct Anim {
     hosted: bool,
     host_bg: Color,
     delay: Duration,
+    /// Playback rate in percent (100 = the file's own timing). Fixed at
+    /// open time; a --speed change in the daemon reopens the source.
+    speed_pct: u16,
     /// Consecutive failures; 3 freezes the animation.
     errors: u32,
     frozen: bool,
@@ -440,6 +454,12 @@ impl Source {
     /// AVIF/JXL can be routed to their dedicated decoders and GIF/WebP to
     /// the animation path.
     pub fn open(path: &Path, animate: bool) -> Result<Source> {
+        Self::open_with_speed(path, animate, 100)
+    }
+
+    /// Like Source::open, with a playback rate for animations (percent;
+    /// 100 = the file's own timing, see the --speed flag).
+    pub fn open_with_speed(path: &Path, animate: bool, speed_pct: u16) -> Result<Source> {
         match detect(path)? {
             Detected::Jxl => {
                 #[cfg(feature = "jxl")]
@@ -478,8 +498,8 @@ impl Source {
                 }
             }
             Detected::Common(format) => match (format, animate) {
-                (ImageFormat::Gif, true) => anim_or_static(path, AnimFormat::Gif),
-                (ImageFormat::WebP, true) => anim_or_static(path, AnimFormat::WebP),
+                (ImageFormat::Gif, true) => anim_or_static(path, AnimFormat::Gif, speed_pct),
+                (ImageFormat::WebP, true) => anim_or_static(path, AnimFormat::WebP, speed_pct),
                 _ => {
                     let img = decode_any(path)?;
                     Ok(Source::Static {
@@ -980,7 +1000,7 @@ impl Anim {
 
     fn schedule(&mut self) {
         if !self.frozen {
-            self.next_step = Some(Instant::now() + self.delay);
+            self.next_step = Some(Instant::now() + scale_delay(self.delay, self.speed_pct));
         }
     }
 
@@ -995,16 +1015,16 @@ impl Anim {
     }
 }
 
-fn open_anim(path: &Path, format: AnimFormat) -> Result<Source> {
+fn open_anim(path: &Path, format: AnimFormat, speed_pct: u16) -> Result<Source> {
     match format {
-        AnimFormat::Gif => open_gif(path),
-        AnimFormat::WebP => open_webp(path),
+        AnimFormat::Gif => open_gif(path, speed_pct),
+        AnimFormat::WebP => open_webp(path, speed_pct),
     }
 }
 
 /// Open an animated GIF: blend the first frame onto a fresh canvas, then
 /// peek (without decoding pixels) whether a second frame exists.
-fn open_gif(path: &Path) -> Result<Source> {
+fn open_gif(path: &Path, speed_pct: u16) -> Result<Source> {
     let (gs, canvas, first_delay_cs) = open_gif_stream(path)?;
     let first_delay = normalize_delay(gif_delay(first_delay_cs));
 
@@ -1019,12 +1039,13 @@ fn open_gif(path: &Path) -> Result<Source> {
                 hosted: false,
                 host_bg: [0, 0, 0],
                 delay: first_delay,
+                speed_pct,
                 errors: 0,
                 frozen: false,
                 serial: 1,
                 frame_changed: true,
                 dirty_rect: None,
-                next_step: Some(Instant::now() + first_delay),
+                next_step: Some(Instant::now() + scale_delay(first_delay, speed_pct)),
             })))
         }
         // Single-frame GIF: a still wallpaper in an animation container.
@@ -1203,7 +1224,7 @@ fn gif_delay(delay_cs: u16) -> Duration {
     Duration::from_millis(u64::from(delay_cs) * 10)
 }
 
-fn open_webp(path: &Path) -> Result<Source> {
+fn open_webp(path: &Path, speed_pct: u16) -> Result<Source> {
     let mut ws = make_webp(path)?;
 
     // A single-frame animation container is a still wallpaper: decode the
@@ -1230,12 +1251,13 @@ fn open_webp(path: &Path) -> Result<Source> {
         hosted: false,
         host_bg: [0, 0, 0],
         delay: first_delay,
+        speed_pct,
         errors: 0,
         frozen: false,
         serial: 1,
         frame_changed: true,
         dirty_rect: None,
-        next_step: Some(Instant::now() + first_delay),
+        next_step: Some(Instant::now() + scale_delay(first_delay, speed_pct)),
     })))
 }
 
@@ -1278,8 +1300,8 @@ fn webp_err(e: image_webp::DecodingError) -> anyhow::Error {
 /// (single-frame WebP has no ANMF chunks at all) and plain stills fall
 /// back to the static decoder. On total failure the original animation
 /// error is reported, since it is the more specific one.
-fn anim_or_static(path: &Path, format: AnimFormat) -> Result<Source> {
-    match open_anim(path, format) {
+fn anim_or_static(path: &Path, format: AnimFormat, speed_pct: u16) -> Result<Source> {
+    match open_anim(path, format, speed_pct) {
         Ok(src) => Ok(src),
         Err(anim_err) => match decode_any(path) {
             Ok(img) => Ok(Source::Static {
@@ -1652,6 +1674,19 @@ mod tests {
         // Frame 3 (green) is a change.
         src.step_hosted(&mut buf);
         assert!(src.frame_changed());
+    }
+
+    #[test]
+    fn speed_scales_frame_delays() {
+        use std::time::Duration as D;
+        assert_eq!(scale_delay(D::from_millis(100), 100), D::from_millis(100));
+        assert_eq!(scale_delay(D::from_millis(100), 200), D::from_millis(50));
+        assert_eq!(scale_delay(D::from_millis(100), 50), D::from_millis(200));
+        assert_eq!(scale_delay(D::from_millis(100), 1000), D::from_millis(10));
+        // 10x on a 20 ms frame is 2 ms — floored so the loop cannot spin.
+        assert_eq!(scale_delay(D::from_millis(20), 1000), D::from_millis(5));
+        // A corrupt/zero speed must never divide by zero (clamped to 10%).
+        assert_eq!(scale_delay(D::from_millis(100), 0), D::from_millis(1000));
     }
 
     #[test]

@@ -18,7 +18,7 @@
         let
           wally = pkgs.rustPlatform.buildRustPackage {
             pname = "wally";
-            version = "1.0.0";
+            version = "0.2.0";
 
             src = self;
 
@@ -33,7 +33,7 @@
 
             meta = with pkgs.lib; {
               description = "Minimal Wayland wallpaper setter with first-class GIF and animated WebP support";
-              homepage = "https://github.com/SONGOKU00mjk/WALLY";
+              homepage = "https://github.com/SONGOKU00mjk/wally";
               license = licenses.gpl3Plus;
               platforms = platforms.linux;
               mainProgram = "wally";
