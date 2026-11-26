@@ -110,12 +110,12 @@ The repository's discoverability settings are reproducible with `gh`:
 
 ```sh
 # homepage + discussions
-gh repo edit SONGOKU00mjk/wally \
-  --homepage "https://github.com/SONGOKU00mjk/wally" \
+gh repo edit SONGOKU00mjk/WALLY \
+  --homepage "https://github.com/SONGOKU00mjk/WALLY" \
   --enable-discussions
 
 # topics (max 20; these are the curated set)
-gh repo edit SONGOKU00mjk/wally \
+gh repo edit SONGOKU00mjk/WALLY \
   --add-topic wayland --add-topic wallpaper --add-topic wallpaper-setter \
   --add-topic swaybg-alternative --add-topic animated-wallpaper \
   --add-topic gif --add-topic webp --add-topic layer-shell \

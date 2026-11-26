@@ -5,11 +5,11 @@
 #
 # Copy-paste install (nothing else needed — the script does the rest):
 #
-#   curl -fsSL https://raw.githubusercontent.com/SONGOKU00mjk/wally/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/SONGOKU00mjk/WALLY/main/install.sh | sh
 #
 # Or clone first and run the script from inside the checkout:
 #
-#   git clone https://github.com/SONGOKU00mjk/wally.git && cd wally && ./install.sh
+#   git clone https://github.com/SONGOKU00mjk/WALLY.git && cd wally && ./install.sh
 #
 #   ./install.sh               prebuilt binary if available, else build from source
 #   ./install.sh --user        install for the current user only (~/.local), never root
@@ -43,14 +43,14 @@
 
 set -eu
 
-REPO_URL="${WALLY_REPO:-https://github.com/SONGOKU00mjk/wally.git}"
-REPO_WEB="https://github.com/SONGOKU00mjk/wally"
+REPO_URL="${WALLY_REPO:-https://github.com/SONGOKU00mjk/WALLY.git}"
+REPO_WEB="https://github.com/SONGOKU00mjk/WALLY"
 # Base URL release assets are fetched from. Override for mirrors or tests:
 #   WALLY_RELEASE_URL=https://mirror.example/wally/releases/download
 # Assets live at $WALLY_RELEASE_URL/<tag>/wally-<triple>.tar.gz (+ SHA256SUMS).
 # When set without WALLY_REF the literal tag "latest" is used, so a mirror
 # can publish a /download/latest/ directory.
-RELEASE_URL="${WALLY_RELEASE_URL:-https://github.com/SONGOKU00mjk/wally/releases/download}"
+RELEASE_URL="${WALLY_RELEASE_URL:-https://github.com/SONGOKU00mjk/WALLY/releases/download}"
 MSRV="1.98" # avif-decode (rav1d) needs this; everything else is far older
 
 log() { printf '%s\n' "install.sh: $*"; }
@@ -121,7 +121,7 @@ Environment:
   WALLY_RELEASE_URL=URL  fetch release assets from URL instead of GitHub
 
 The one-line install without cloning first:
-  curl -fsSL https://raw.githubusercontent.com/SONGOKU00mjk/wally/main/install.sh | sh
+  curl -fsSL https://raw.githubusercontent.com/SONGOKU00mjk/WALLY/main/install.sh | sh
 EOF
 }
 
@@ -439,10 +439,10 @@ try_prebuilt() {
     # (WALLY_RELEASE_URL set) serves its own "latest" directory.
     if [ -n "${WALLY_REF:-}" ]; then
         ver="$WALLY_REF"
-    elif [ "$RELEASE_URL" != "https://github.com/SONGOKU00mjk/wally/releases/download" ]; then
+    elif [ "$RELEASE_URL" != "https://github.com/SONGOKU00mjk/WALLY/releases/download" ]; then
         ver="latest"
     else
-        ver="$(curl -fsSL "https://api.github.com/repos/SONGOKU00mjk/wally/releases/latest" 2>/dev/null |
+        ver="$(curl -fsSL "https://api.github.com/repos/SONGOKU00mjk/WALLY/releases/latest" 2>/dev/null |
             sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)" || ver=""
         [ -n "$ver" ] || ver="latest"
     fi

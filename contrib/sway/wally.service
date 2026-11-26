@@ -1,6 +1,6 @@
 [Unit]
 Description=wally — Wayland wallpaper setter
-Documentation=https://github.com/SONGOKU00mjk/wally
+Documentation=https://github.com/SONGOKU00mjk/WALLY
 # Only run inside a session that actually has a Wayland display; avoids a
 # failed unit on every headless/loginless boot.
 ConditionEnvironment=WAYLAND_DISPLAY

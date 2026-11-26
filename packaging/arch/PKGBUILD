@@ -12,7 +12,7 @@ pkgver=0.2.0
 pkgrel=1
 pkgdesc="Minimal Wayland wallpaper setter with first-class GIF and animated WebP support"
 arch=('x86_64' 'aarch64')
-url="https://github.com/SONGOKU00mjk/wally"
+url="https://github.com/SONGOKU00mjk/WALLY"
 license=('GPL-3.0-or-later')
 depends=('glibc' 'gcc-libs')
 makedepends=('cargo' 'git' 'nasm')
@@ -22,17 +22,17 @@ sha256sums=('SKIP')
 options=('!lto') # cargo already runs LTO via the profile; no extra flag
 
 build() {
-    cd "wally-$pkgver"
+    cd "WALLY-$pkgver"
     cargo build --release --locked
 }
 
 check() {
-    cd "wally-$pkgver"
+    cd "WALLY-$pkgver"
     cargo test --release --locked
 }
 
 package() {
-    cd "wally-$pkgver"
+    cd "WALLY-$pkgver"
     install -Dm755 target/release/wally "$pkgdir/usr/bin/wally"
     install -Dm644 README.md "$pkgdir/usr/share/doc/wally/README.md"
     install -Dm644 CHANGELOG.md "$pkgdir/usr/share/doc/wally/CHANGELOG.md"

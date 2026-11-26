@@ -33,7 +33,7 @@
 
             meta = with pkgs.lib; {
               description = "Minimal Wayland wallpaper setter with first-class GIF and animated WebP support";
-              homepage = "https://github.com/SONGOKU00mjk/wally";
+              homepage = "https://github.com/SONGOKU00mjk/WALLY";
               license = licenses.gpl3Plus;
               platforms = platforms.linux;
               mainProgram = "wally";

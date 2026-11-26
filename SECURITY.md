@@ -10,7 +10,7 @@ wally is pre-1.0: security fixes land in the latest release (currently the
 Please **do not** open a public issue for a vulnerability.
 
 Use GitHub's private reporting flow:
-<https://github.com/SONGOKU00mjk/wally/security/advisories/new>
+<https://github.com/SONGOKU00mjk/WALLY/security/advisories/new>
 
 Include:
 

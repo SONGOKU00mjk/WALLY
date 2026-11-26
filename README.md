@@ -2,8 +2,8 @@
 
 **A tiny Wayland wallpaper setter — one binary, every output, animated GIF and WebP that actually behave.**
 
-[![CI](https://github.com/SONGOKU00mjk/wally/actions/workflows/ci.yml/badge.svg)](https://github.com/SONGOKU00mjk/wally/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/SONGOKU00mjk/wally?display_name=tag)](https://github.com/SONGOKU00mjk/wally/releases)
+[![CI](https://github.com/SONGOKU00mjk/WALLY/actions/workflows/ci.yml/badge.svg)](https://github.com/SONGOKU00mjk/WALLY/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/SONGOKU00mjk/WALLY?display_name=tag)](https://github.com/SONGOKU00mjk/WALLY/releases)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 [![MSRV](https://img.shields.io/badge/rust-1.98%2B-orange.svg)](https://www.rust-lang.org)
 
@@ -77,7 +77,7 @@ speed, and goes to **zero CPU** when nobody can see the screen.
 ### One line
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/SONGOKU00mjk/wally/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/SONGOKU00mjk/WALLY/main/install.sh | sh
 ```
 
 The script downloads the prebuilt glibc binary for x86_64/aarch64 when one
@@ -88,7 +88,7 @@ system packages are missing or `/usr/local/bin` has to be written.
 ### From source
 
 ```sh
-git clone https://github.com/SONGOKU00mjk/wally.git
+git clone https://github.com/SONGOKU00mjk/WALLY.git
 cd wally
 cargo build --release
 sudo install -Dm755 target/release/wally /usr/local/bin/wally
@@ -97,7 +97,7 @@ sudo install -Dm755 target/release/wally /usr/local/bin/wally
 or through Cargo:
 
 ```sh
-cargo install --git https://github.com/SONGOKU00mjk/wally wally
+cargo install --git https://github.com/SONGOKU00mjk/WALLY wally
 ```
 
 Requirements: Linux, Rust 1.98+, a C compiler on x86_64 (`nasm` for the
@@ -109,7 +109,7 @@ system library requirements.
 | Distribution | Command |
 | --- | --- |
 | Arch (AUR) | `yay -S wally` or `yay -S wally-git` (see `packaging/arch`) |
-| Nix | `nix run github:SONGOKU00mjk/wally` (see `packaging/nix`) |
+| Nix | `nix run github:SONGOKU00mjk/WALLY` (see `packaging/nix`) |
 | Anything else | `install.sh` or `cargo install` |
 
 ### Installer options
