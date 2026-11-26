@@ -114,15 +114,28 @@ jobs:
           path: dist/wally-${{ matrix.target }}.tar.gz
 
   packages:
-    name: distro packages
+    name: packages ${{ matrix.arch }}
     needs: build
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Packaged on a native runner per architecture: rpmbuild refuses
+          # to tag a package with an architecture outside the host's
+          # compatibility table, and a native dpkg/rpm also validates the
+          # real package format rather than a cross-built guess.
+          - arch: x86_64
+            triple: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+          - arch: aarch64
+            triple: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
       # The release tarballs built above are the input: packaging never
-      # compiles or executes the binary, so the aarch64 packages are
-      # produced on the x86_64 runner without another toolchain.
+      # compiles or executes the binary.
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
@@ -138,15 +151,12 @@ jobs:
           set -eu
           version="${GITHUB_REF_NAME#v}"
           mkdir -p dist
-          for triple in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
-            rm -f /tmp/wally
-            tar xzf "artifacts/wally-$triple.tar.gz" -C /tmp
-            ./packaging/build-packages.sh \
-              --version "$version" \
-              --triple "$triple" \
-              --binary /tmp/wally \
-              --outdir dist
-          done
+          tar xzf "artifacts/wally-${{ matrix.triple }}.tar.gz" -C /tmp
+          ./packaging/build-packages.sh \
+            --version "$version" \
+            --triple "${{ matrix.triple }}" \
+            --binary /tmp/wally \
+            --outdir dist
           ls -l dist
 
       # A package that cannot be opened by its own tooling is not a
@@ -164,7 +174,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: packages
+          name: packages-${{ matrix.arch }}
           path: dist/*
 
   release:
