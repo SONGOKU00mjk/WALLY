@@ -1919,10 +1919,10 @@ mod tests {
     // failures — never a panic, never a busy loop.
 
     /// Slice a fixture to a fraction of its bytes.
-    fn truncated(name: &str, fraction: usize) -> PathBuf {
+    fn truncated(tag: &str, name: &str, fraction: usize) -> PathBuf {
         let bytes = std::fs::read(fixture(name)).unwrap();
         let cut = bytes.len() * fraction / 100;
-        let dir = std::env::temp_dir().join(format!("wally-adv-{}", std::process::id()));
+        let dir = adv_dir(tag);
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join(format!("trunc-{}-{}", fraction, name));
         std::fs::write(&p, &bytes[..cut]).unwrap();
@@ -1972,21 +1972,25 @@ mod tests {
         for c in keep {
             out.extend_from_slice(&c);
         }
-        let dir = std::env::temp_dir().join(format!("wally-adv-{}", std::process::id()));
+        let dir = adv_dir("single-frame");
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("single-frame-anim.webp");
         std::fs::write(&p, &out).unwrap();
         p
     }
 
-    fn adv_dir() -> PathBuf {
-        std::env::temp_dir().join(format!("wally-adv-{}", std::process::id()))
+    /// A temporary directory per test tag. Tests run in parallel threads
+    /// of one process, so a directory shared by every test could be
+    /// deleted by one test while another is still decoding from it — the
+    /// exact race that made the truncated-container tests flaky.
+    fn adv_dir(tag: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("wally-adv-{}-{tag}", std::process::id()))
     }
 
     #[test]
     fn truncated_gif_fails_clean_or_freezes_never_panics() {
         for fraction in [10usize, 40, 70, 95] {
-            let p = truncated("anim.gif", fraction);
+            let p = truncated("truncated-gif", "anim.gif", fraction);
             match Source::open(&p, true) {
                 Err(e) => assert!(!e.to_string().is_empty(), "error text exists"),
                 Ok(mut src) => {
@@ -2001,13 +2005,13 @@ mod tests {
                 }
             }
         }
-        let _ = std::fs::remove_dir_all(adv_dir());
+        let _ = std::fs::remove_dir_all(adv_dir("truncated-gif"));
     }
 
     #[test]
     fn truncated_webp_fails_clean_or_freezes_never_panics() {
         for fraction in [10usize, 40, 70, 95] {
-            let p = truncated("anim-lossy.webp", fraction);
+            let p = truncated("truncated-webp", "anim-lossy.webp", fraction);
             match Source::open(&p, true) {
                 Err(e) => assert!(!e.to_string().is_empty()),
                 Ok(mut src) => {
@@ -2018,7 +2022,7 @@ mod tests {
                 }
             }
         }
-        let _ = std::fs::remove_dir_all(adv_dir());
+        let _ = std::fs::remove_dir_all(adv_dir("truncated-webp"));
     }
 
     #[test]
@@ -2032,14 +2036,14 @@ mod tests {
         // way.
         assert!(!src.is_animation(), "one ANMF frame opens as a still");
         assert_eq!(src.pixels().expect("still decodes").dimensions(), (64, 48));
-        let _ = std::fs::remove_dir_all(adv_dir());
+        let _ = std::fs::remove_dir_all(adv_dir("single-frame"));
     }
 
     #[test]
     fn content_wins_over_extension() {
         // anim.gif bytes named .png: sniffing routes by content, so this
         // is a GIF animation no matter the name.
-        let dir = adv_dir();
+        let dir = adv_dir("content-wins");
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("looks-like.png");
         std::fs::copy(fixture("anim.gif"), &p).unwrap();
@@ -2050,7 +2054,7 @@ mod tests {
 
     #[test]
     fn tiny_and_extreme_gifs_open_and_step() {
-        let dir = adv_dir();
+        let dir = adv_dir("tiny-extreme");
         std::fs::create_dir_all(&dir).unwrap();
         for (w, h) in [(1u16, 1u16), (1, 9), (9, 1), (3, 3)] {
             let p = dir.join(format!("t{}x{}.gif", w, h));
