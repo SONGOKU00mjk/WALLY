@@ -6,6 +6,15 @@ one binary, no GUI toolkit, no heavyweight dependencies, a one-shot CLI that
 stays the default. Changes that grow the project without growing what it
 does for users are usually rejected.
 
+## AI assistance
+
+Much of this codebase was written with AI coding agents, guided and reviewed
+by the maintainer. That does not lower the bar in this document: a change
+must still be understood by the person submitting it, tested, and
+explainable in its commit message. If AI tools produced a substantial part
+of a patch, say so in the pull request — reviewers will know to look hardest
+at the `unsafe` blocks and the decoder paths.
+
 ## Prerequisites
 
 - A Rust toolchain ≥ 1.98 (`rustup` stable is fine) — 1.98 is required by

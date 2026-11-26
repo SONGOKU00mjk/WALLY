@@ -7,6 +7,15 @@
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 [![MSRV](https://img.shields.io/badge/rust-1.98%2B-orange.svg)](https://www.rust-lang.org)
 
+> [!WARNING]
+> **This is a vibe-coded project.** Most of wally was produced by prompting
+> AI coding agents, with the maintainer steering, testing and reviewing the
+> result — not by writing every line by hand. It has unit and integration
+> tests, CI, packages and a release pipeline, but it has **not** been
+> independently audited and comes with no warranty. Treat it as a hobby
+> project rather than production-grade software, and read the code before
+> running it somewhere that matters.
+
 `wally` is a wallpaper setter for compositors that implement `wlr-layer-shell`
 (Sway, Hyprland, river, niri, Wayfire, labwc, KDE Plasma). It is a single
 self-contained binary written in Rust: no GUI toolkit, no system

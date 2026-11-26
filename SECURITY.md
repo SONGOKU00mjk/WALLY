@@ -5,6 +5,16 @@
 wally is pre-1.0: security fixes land in the latest release (currently the
 0.2.x line) and on `main`. Older tags are not maintained.
 
+## Expectations
+
+wally is a hobby project developed largely with AI assistance. It has not
+been independently audited; treat every report as something to investigate
+carefully rather than as a promise covered by a support contract. The image
+decoders (GIF, WebP, AVIF, JPEG XL) are the largest attack surface.
+
+There is no security-response SLA, but reports are taken seriously and
+fixed as time allows.
+
 ## Reporting a vulnerability
 
 Please **do not** open a public issue for a vulnerability.
