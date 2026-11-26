@@ -3,7 +3,7 @@
 # package and install.sh: AVIF on (nasm on x86_64), JXL off.
 
 pkgname=wally-git
-pkgver=0.2.0.r0.g0000000
+pkgver=0.2.1.r0.g0000000
 pkgrel=1
 pkgdesc="Minimal Wayland wallpaper setter with first-class GIF and animated WebP support (git master)"
 arch=('x86_64' 'aarch64')
@@ -34,6 +34,8 @@ check() {
 package() {
     cd WALLY
     install -Dm755 target/release/wally "$pkgdir/usr/bin/wally"
+    install -Dm644 packaging/man/wally.1 "$pkgdir/usr/share/man/man1/wally.1"
     install -Dm644 README.md "$pkgdir/usr/share/doc/wally/README.md"
+    install -Dm644 CHANGELOG.md "$pkgdir/usr/share/doc/wally/CHANGELOG.md"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/wally/LICENSE"
 }

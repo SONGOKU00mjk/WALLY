@@ -5,6 +5,40 @@ All notable changes to wally are documented here. The format follows
 aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 inside the 0.x line.
 
+## [0.2.1] — 2026-11-26
+
+Native packages, and an installer that can use them.
+
+### Added
+
+- **Native binary packages for every release**, for x86_64 and aarch64:
+  `.deb` (Debian/Ubuntu), `.rpm` (Fedora/RHEL) and `.pkg.tar.zst` (Arch).
+  They are built from the same verified release binaries as the tarballs
+  and install `/usr/bin/wally`, the manual page, the licence and the docs
+  under `/usr/share`.
+- `install.sh --package`: installs the native package for the current
+  distribution. It resolves the release asset, verifies it against the
+  release's `SHA256SUMS`, removes an older single-binary copy that would
+  shadow `/usr/bin/wally`, and hands the file to apt, dnf or pacman.
+  Requires root by definition and is rejected together with `--user`.
+- A manual page (`packaging/man/wally.1`, `man wally`), installed by every
+  package format.
+- `packaging/README.md`: the artifact-name contract, how to build packages
+  locally, what they contain, and why the Arch release package differs
+  from the AUR PKGBUILD.
+- The release workflow gained a packages job that builds and validates all
+  three formats for both architectures, covers them with `SHA256SUMS`, and
+  publishes them next to the tarballs.
+
+### Changed
+
+- The installer's download and checksum code is shared by the binary and
+  package paths (`release_tag`, `fetch_asset`, `verify_asset`). A checksum
+  mismatch is now always fatal: a downloaded file that does not match must
+  never silently turn into "well, build from source instead".
+- `install.sh --check` reports which native package format this machine can
+  install.
+
 ## [0.2.0] — 2026-11-26
 
 The "it actually works on a real compositor" release. The project line is

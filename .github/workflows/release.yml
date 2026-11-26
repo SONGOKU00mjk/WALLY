@@ -113,9 +113,63 @@ jobs:
           name: wally-${{ matrix.target }}
           path: dist/wally-${{ matrix.target }}.tar.gz
 
+  packages:
+    name: distro packages
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The release tarballs built above are the input: packaging never
+      # compiles or executes the binary, so the aarch64 packages are
+      # produced on the x86_64 runner without another toolchain.
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: artifacts
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm zstd
+
+      - name: Build .deb, .rpm and .pkg.tar.zst
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          for triple in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+            rm -f /tmp/wally
+            tar xzf "artifacts/wally-$triple.tar.gz" -C /tmp
+            ./packaging/build-packages.sh \
+              --version "$version" \
+              --triple "$triple" \
+              --binary /tmp/wally \
+              --outdir dist
+          done
+          ls -l dist
+
+      # A package that cannot be opened by its own tooling is not a
+      # package. pacman is not available on Ubuntu, so the Arch archive is
+      # checked structurally instead.
+      - name: Validate packages
+        run: |
+          set -eu
+          for f in dist/*.deb; do dpkg-deb --info "$f"; done
+          for f in dist/*.rpm; do rpm -qip "$f" >/dev/null && echo "ok $f"; done
+          for f in dist/*.pkg.tar.zst; do
+            tar -tf "$f" | grep -qx 'usr/bin/wally'
+            echo "ok $f"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: dist/*
+
   release:
     name: publish
-    needs: build
+    needs: [build, packages]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -124,7 +178,10 @@ jobs:
 
       - name: Checksums
         run: |
-          sha256sum wally-*.tar.gz > SHA256SUMS
+          # Everything the release ships is covered by one manifest: the
+          # portable tarballs, the three distro packages, and the checksums
+          # themselves are the only file not listed.
+          sha256sum wally-*.tar.gz wally-*.rpm wally-*.pkg.tar.zst wally_*.deb > SHA256SUMS
           cat SHA256SUMS
           # Verify our own manifest parses and matches before publishing.
           sha256sum -c SHA256SUMS
@@ -133,5 +190,8 @@ jobs:
         with:
           files: |
             wally-*.tar.gz
+            wally-*.rpm
+            wally-*.pkg.tar.zst
+            wally_*.deb
             SHA256SUMS
           generate_release_notes: true

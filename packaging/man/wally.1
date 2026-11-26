@@ -1,0 +1,181 @@
+.TH WALLY 1 "2026-11-26" "wally 0.2.1" "User Commands"
+.SH NAME
+wally \- minimal Wayland wallpaper setter with animated GIF and WebP support
+.SH SYNOPSIS
+.B wally
+[\fIOPTIONS\fR]
+.br
+.B wally
+\fIIMAGE\fR [\fIOPTIONS\fR]
+.br
+.B wally
+\fBset\fR|\fBquery\fR|\fBrestore\fR|\fBstop\fR [\fIOPTIONS\fR]
+.SH DESCRIPTION
+.B wally
+sets a wallpaper on every output of a compositor that implements
+\fBwlr\-layer\-shell\fR (Sway, Hyprland, river, niri, Wayfire, labwc, KDE
+Plasma). It is a single self\-contained Rust binary with no runtime library
+dependencies: the Wayland client, the image decoders and the compositor are
+all pure Rust.
+.PP
+Still images, animated GIF and animated WebP are supported, as are solid
+colours. Animations run at the timing stored in the file and stop consuming
+CPU when no output can present them (screen off, session locked, output
+occluded). A static wallpaper costs no CPU after its first frame.
+.PP
+Options apply to every output by default. After
+.B \-\-output
+they apply only to the named output, until the next
+.BR \-\-output .
+.SH OPTIONS
+.TP
+.BI \-i ", " \-\-image " " PATH
+Image to display. A bare path is accepted as shorthand.
+.TP
+.BI \-c ", " \-\-color " " COLOR
+Solid colour instead of an image, as #RGB or #RRGGBB.
+.TP
+.BI \-m ", " \-\-mode " " MODE
+Scaling mode: \fBstretch\fR, \fBfill\fR (default), \fBfit\fR,
+\fBcenter\fR or \fBtile\fR.
+.TP
+.BI \-o ", " \-\-output " " NAME
+Apply the options that follow to this output only.
+.TP
+.BI \-b ", " \-\-background " " COLOR
+Padding colour for \fBfit\fR and \fBcenter\fR. Default #000000.
+.TP
+.BR \-A ", " \-\-no\-animate
+Show only the first frame of an animation.
+.TP
+.BI \-\-speed " " FACTOR
+Animation playback rate between 0.1 and 10. Default 1 (the file's own
+timing).
+.TP
+.BI \-\-transition " " KIND
+Animate the first frame with \fBfade\fR or \fBwipe\fR.
+.TP
+.BI \-\-duration " " MS
+Transition length in milliseconds. Default 300.
+.TP
+.B \-\-replace
+Take over from a running wally instance after the first frame is on
+screen, so changing the wallpaper does not flash black.
+.TP
+.BI \-\-rotate " " DIR
+Foreground\-only rotation: show the images in DIR and advance every
+interval. Starts with the first image immediately.
+.TP
+.BI \-\-interval " " DUR
+Rotation period: 90s, 30m, 2h, 1h30m. Default 30m.
+.TP
+.B \-\-shuffle
+With \fB\-\-rotate\fR, visit the files in random order. Every file is shown
+once per cycle.
+.TP
+.B \-\-daemon
+Stay resident and serve \fBset\fR, \fBquery\fR, \fBrestore\fR and
+\fBstop\fR on a Unix socket in $XDG_RUNTIME_DIR.
+.TP
+.B \-\-scale\-force " " N
+Render at this integer buffer scale instead of the output's reported scale.
+.TP
+.B \-\-list\-outputs
+Print each connected output (name, mode, scale, transform) and exit.
+.TP
+.B \-\-dry\-run
+Validate the images, print the decoded dimensions and the scaling decision
+per output, then exit without drawing.
+.TP
+.B \-\-query
+Print the wallpaper last set per output, from the state file.
+.TP
+.B \-\-restore
+Re\-apply the wallpaper last set per output.
+.TP
+.B \-\-json
+Machine\-readable output for \fB\-\-list\-outputs\fR and \fB\-\-query\fR.
+.TP
+.BR \-v ", " \-\-version
+Print the version and exit.
+.TP
+.BR \-h ", " \-\-help
+Print help and exit.
+.SH COMMANDS
+These talk to a running \fB\-\-daemon\fR instance.
+.TP
+.B set [OPTIONS]
+Apply a new configuration to the running daemon.
+.TP
+.B query
+Print what the daemon is showing.
+.TP
+.B restore
+Re\-apply the last recorded state.
+.TP
+.B stop
+Shut the daemon down.
+.SH MODES
+.TP
+.B fill
+Scale to cover the output and crop the overflow (default).
+.TP
+.B fit
+Scale to fit inside the output, letterboxing with the background colour.
+.TP
+.B stretch
+Distort the image to fill the output.
+.TP
+.B center
+Show the image 1:1, centred.
+.TP
+.B tile
+Repeat the image at its original size.
+.SH ENVIRONMENT
+.TP
+.B WALLY_DEBUG
+Set to 1 to print resident memory and CPU time as they change, 2 to also
+trace skipped commits and per\-frame compose rectangles.
+.TP
+.B XDG_STATE_HOME
+Directory for \fBwally/state.conf\fR. Default \fI~/.local/state\fR.
+.TP
+.B XDG_RUNTIME_DIR
+Directory for the daemon control socket.
+.TP
+.B WAYLAND_DISPLAY
+The compositor to connect to.
+.SH EXAMPLES
+.TP
+.B wally ~/pictures/wall.jpg
+Set one image on every output.
+.TP
+.B wally \-o DP\-1 \-i left.jpg \-o eDP\-1 \-i right.jpg
+Different wallpaper per monitor.
+.TP
+.B wally \-i loop.webp \-\-speed 2
+Play an animated WebP at twice its native speed.
+.TP
+.B wally \-\-rotate ~/pictures/wallpapers \-\-interval 30m \-\-shuffle
+Rotate a folder in random order every 30 minutes.
+.TP
+.B wally \-\-replace \-\-transition fade \-i next.png
+Swap the wallpaper without a black gap, fading into the new image.
+.TP
+.B wally \-\-list\-outputs \-\-json
+Print outputs as JSON for a status bar or script.
+.SH EXIT STATUS
+0 on success, 1 on a runtime error (unreadable image, no compositor,
+unsupported protocol), 2 on a usage error.
+.SH COMPOSITORS
+Requires \fBwlr\-layer\-shell\fR and \fBwl_shm\fR: Sway, Hyprland, river,
+niri, Wayfire, labwc and KDE Plasma work. GNOME does not implement layer
+shell and is not supported.
+.SH SEE ALSO
+.BR swaybg (1),
+.BR sway (1)
+.PP
+Project home: https://github.com/SONGOKU00mjk/WALLY
+.SH BUGS
+Report bugs at https://github.com/SONGOKU00mjk/WALLY/issues with the output
+of \fBwally \-\-list\-outputs\fR and \fBWALLY_DEBUG=1 wally \-i FILE\fR.

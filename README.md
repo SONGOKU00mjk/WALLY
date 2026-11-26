@@ -106,23 +106,50 @@ system library requirements.
 
 ### Packages
 
-| Distribution | Command |
+Every release ships native packages for x86_64 and aarch64, built from the
+same verified binaries as the tarballs:
+
+| Distribution | Package |
 | --- | --- |
-| Arch | PKGBUILD for `wally` and `wally-git` in `packaging/arch` |
-| Nix | `nix run github:SONGOKU00mjk/WALLY` (flake at the repository root) |
-| Anything else | `install.sh` or `cargo install` |
+| Debian / Ubuntu | `wally_<version>_amd64.deb` / `..._arm64.deb` |
+| Fedora / RHEL | `wally-<version>-1.x86_64.rpm` / `...aarch64.rpm` |
+| Arch Linux | `wally-<version>-1-x86_64.pkg.tar.zst` / `...-aarch64...` |
+| Any Linux | `wally-<triple>.tar.gz` (one glibc binary, no installer) |
+
+Download them from the [releases page](https://github.com/SONGOKU00mjk/WALLY/releases),
+or let the installer pick the right one:
+
+```sh
+sudo apt install ./wally_0.2.1_amd64.deb          # Debian / Ubuntu
+sudo dnf install ./wally-0.2.1-1.x86_64.rpm       # Fedora / RHEL
+sudo pacman -U wally-0.2.1-1-x86_64.pkg.tar.zst   # Arch
+```
+
+or, without knowing the asset names:
+
+```sh
+./install.sh --package        # picks .deb/.rpm/.pkg.tar.zst, needs root
+```
+
+The packages install `/usr/bin/wally`, the manual page (`man wally`), the
+licence and the documentation under `/usr/share`. The portable tarball is
+still the zero-dependency option: one binary, nothing else.
+
+AUR PKGBUILDs (`wally`, `wally-git`) and a Nix flake are also in the
+repository; see [packaging/README.md](packaging/README.md).
 
 ### Installer options
 
 ```sh
 ./install.sh --user          # install to ~/.local/bin, never root
+./install.sh --package      # native .deb/.rpm/.pkg.tar.zst (needs root)
 ./install.sh --from-source   # always build, never download
 ./install.sh --prebuilt      # prebuilt only, fail instead of building
 ./install.sh --no-avif       # source build without AVIF (no nasm needed)
 ./install.sh --check         # report what this machine provides
 ./install.sh --uninstall     # remove every installed copy
 PREFIX=/opt/wally ./install.sh
-WALLY_REF=v0.2.0 ./install.sh   # a specific tag or branch
+WALLY_REF=v0.2.1 ./install.sh   # a specific tag or branch
 ```
 
 ## Usage

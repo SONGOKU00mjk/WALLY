@@ -17,16 +17,22 @@
 #   ./install.sh --no-avif     build without the AVIF decoder (no nasm needed on x86_64)
 #                              (implies --from-source: the prebuilt binary ships AVIF)
 #   ./install.sh --prebuilt    prebuilt binary only — fail instead of falling back
+#   ./install.sh --package     install the native package for this distribution
 #   ./install.sh --check       report what this machine has
 #   ./install.sh --uninstall   remove every installed copy of wally
 #   PREFIX=/opt/wally ./install.sh ...    choose the install prefix
-#   WALLY_REF=v0.2.0 ./install.sh ...     install that tag/branch instead of the latest release
+#   WALLY_REF=v0.2.1 ./install.sh ...     install that tag/branch instead of the latest release
 #
 # The prebuilt path downloads wally-<triple>.tar.gz from the release whose
 # tag matches WALLY_REF (or the latest release), verifies it against the
 # release's SHA256SUMS, and installs the binary. Prebuilt artifacts are
 # glibc builds for x86_64 and aarch64; anything else (musl, other arches)
 # falls back to a source build automatically.
+#
+# --package installs the native package for this distribution instead
+# (.deb on Debian/Ubuntu, .rpm on Fedora/RHEL, .pkg.tar.zst on Arch),
+# which also installs the man page and licence under /usr. It needs root
+# because that is how distro packages are installed.
 #
 # A source build needs git, a C compiler, Rust >= 1.98 (rustup is installed
 # automatically if missing) and, on x86_64, nasm for the AVIF decoder. The
@@ -108,6 +114,8 @@ manager, clones the wally repository, builds it and installs the binary.
                  implies --from-source)
   --prebuilt     download the prebuilt release binary only — fail instead
                  of falling back to a source build
+  --package      install the native .deb/.rpm/.pkg.tar.zst for this
+                 distribution from the release (needs root; installs to /usr)
   --check        show what this machine has
   --uninstall    remove every installed copy of wally
   -h, --help     this help
@@ -398,6 +406,55 @@ install_source() {
     place_and_report "target/release/wally" cp
 }
 
+# Which release to use: WALLY_REF when given; else the newest release tag
+# according to the GitHub API, falling back to the "latest" tag redirect so
+# we still work when the API is rate-limited. A mirror (WALLY_RELEASE_URL
+# set) serves its own "latest" directory.
+release_tag() {
+    if [ -n "${WALLY_REF:-}" ]; then
+        printf '%s\n' "$WALLY_REF"
+    elif [ "$RELEASE_URL" != "https://github.com/SONGOKU00mjk/WALLY/releases/download" ]; then
+        printf 'latest\n'
+    else
+        ver="$(curl -fsSL "https://api.github.com/repos/SONGOKU00mjk/WALLY/releases/latest" 2>/dev/null |
+            sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)" || ver=""
+        [ -n "$ver" ] || ver="latest"
+        printf '%s\n' "$ver"
+    fi
+}
+
+# Download one release asset. Returns non-zero without dying so callers can
+# decide between falling back to a source build and aborting.
+fetch_asset() { # $1 tag, $2 asset name, $3 destination path
+    url="$RELEASE_URL/$1/$2"
+    log "downloading $url"
+    if have curl; then
+        curl -fL --progress-bar -o "$3" "$url"
+    else
+        wget -q --show-progress -O "$3" "$url"
+    fi
+}
+
+# Verify a downloaded asset against the release's SHA256SUMS. A fetched
+# manifest makes verification mandatory; a mismatch is always fatal (never
+# fall back to a source build after downloading something that does not
+# match its checksum). A mirror that does not publish SHA256SUMS is
+# reported and accepted.
+verify_asset() { # $1 directory, $2 asset name, $3 tag
+    if curl -fsSL -o "$1/SHA256SUMS" "$RELEASE_URL/$3/SHA256SUMS" 2>/dev/null ||
+        wget -q -O "$1/SHA256SUMS" "$RELEASE_URL/$3/SHA256SUMS" 2>/dev/null; then
+        if ! have sha256sum; then
+            die "sha256sum is unavailable; refusing to install an unverified download"
+        fi
+        (cd "$1" && grep -F "$2" SHA256SUMS | sha256sum -c -) ||
+            die "checksum mismatch for $2 — refusing to install it"
+        log "checksum ok"
+    else
+        rm -f "$1/SHA256SUMS"
+        log "no SHA256SUMS found for release $3; skipping verification"
+    fi
+}
+
 # --------------------------------------------------------------- prebuilt
 
 # Download and install the prebuilt binary for this machine.
@@ -433,60 +490,131 @@ try_prebuilt() {
         return 1
     fi
 
-    # Which release: WALLY_REF when given; else the newest release tag
-    # according to the GitHub API, falling back to the "latest" tag
-    # redirect so we still work when the API is rate-limited. A mirror
-    # (WALLY_RELEASE_URL set) serves its own "latest" directory.
-    if [ -n "${WALLY_REF:-}" ]; then
-        ver="$WALLY_REF"
-    elif [ "$RELEASE_URL" != "https://github.com/SONGOKU00mjk/WALLY/releases/download" ]; then
-        ver="latest"
-    else
-        ver="$(curl -fsSL "https://api.github.com/repos/SONGOKU00mjk/WALLY/releases/latest" 2>/dev/null |
-            sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)" || ver=""
-        [ -n "$ver" ] || ver="latest"
-    fi
+    ver="$(release_tag)"
 
     scratch="$(mktemp -d "${TMPDIR:-/tmp}/wally-dl.XXXXXX")"
-    url="$RELEASE_URL/$ver/wally-$t.tar.gz"
-    log "downloading $url"
-    # Keep the canonical asset filename: SHA256SUMS lists it by name.
-    if have curl; then
-        curl -fL --progress-bar -o "$scratch/wally-$t.tar.gz" "$url" || {
-            fail "download failed — no artifact for this machine at release $ver?"
-            return 1
-        }
-    else
-        wget -q --show-progress -O "$scratch/wally-$t.tar.gz" "$url" || {
-            fail "download failed — no artifact for this machine at release $ver?"
-            return 1
-        }
+    asset="wally-$t.tar.gz"
+    if ! fetch_asset "$ver" "$asset" "$scratch/$asset"; then
+        fail "download failed — no artifact for this machine at release $ver?"
+        return 1
     fi
+    verify_asset "$scratch" "$asset" "$ver"
 
-    # Verify against the release's SHA256SUMS before anything touches the
-    # system. A fetched SHA256SUMS makes verification mandatory; without
-    # one we say so and continue (a mirror may not carry it).
-    if curl -fsSL -o "$scratch/SHA256SUMS" "$RELEASE_URL/$ver/SHA256SUMS" 2>/dev/null ||
-        wget -q -O "$scratch/SHA256SUMS" "$RELEASE_URL/$ver/SHA256SUMS" 2>/dev/null; then
-        if have sha256sum; then
-            (cd "$scratch" && grep -F "wally-$t.tar.gz" SHA256SUMS | sha256sum -c -) || {
-                fail "checksum mismatch — not installing the downloaded binary"
-                return 1
-            }
-            log "checksum ok"
-        else
-            log "sha256sum unavailable; cannot verify — aborting the prebuilt install"
-            return 1
-        fi
-    else
-        rm -f "$scratch/SHA256SUMS"
-        log "no SHA256SUMS found for release $ver; skipping verification"
-    fi
-
-    tar -xzf "$scratch/wally-$t.tar.gz" -C "$scratch"
+    tar -xzf "$scratch/$asset" -C "$scratch"
     chmod +x "$scratch/wally" # before moving: once root-installed it is root-owned
     remove_old
     place_and_report "$scratch/wally" mv
+}
+
+# --------------------------------------------------------------- packages
+
+# The native package format this distribution installs, or empty when the
+# release does not ship one for its package manager.
+package_format() {
+    case "$(detect_pm)" in
+        apt) printf 'deb\n' ;;
+        dnf) printf 'rpm\n' ;;
+        pacman) printf 'pkg\n' ;;
+        *) printf '' ;;
+    esac
+}
+
+# The release asset name for a package format and tag. The names are part
+# of the release contract (see packaging/build-packages.sh).
+package_asset() { # $1 format, $2 tag
+    v="${2#v}"
+    a="$(arch)"
+    case "$1" in
+        deb)
+            case "$a" in
+                x86_64) printf 'wally_%s_amd64.deb\n' "$v" ;;
+                aarch64) printf 'wally_%s_arm64.deb\n' "$v" ;;
+            esac
+            ;;
+        rpm)
+            case "$a" in
+                x86_64 | aarch64) printf 'wally-%s-1.%s.rpm\n' "$v" "$a" ;;
+            esac
+            ;;
+        pkg)
+            case "$a" in
+                x86_64 | aarch64) printf 'wally-%s-1-%s.pkg.tar.zst\n' "$v" "$a" ;;
+            esac
+            ;;
+    esac
+}
+
+# A package installed through the distro owns /usr/bin/wally. Any copy in
+# an earlier PATH entry (the old single-binary install) would shadow it,
+# so remove those, but never the package-managed file itself.
+remove_shadowing() {
+    for p in /usr/local/bin/wally "$HOME/.local/bin/wally" "$HOME/.cargo/bin/wally"; do
+        [ -e "$p" ] || continue
+        if [ -w "$(dirname "$p")" ]; then
+            rm -f "$p" && log "removed shadowing copy: $p"
+        elif try_root rm -f "$p"; then
+            log "removed shadowing copy: $p"
+        else
+            log "warning: could not remove $p (no root) — it may shadow the package binary"
+        fi
+    done
+}
+
+# Install the native package from the release. Unlike the plain binary
+# install this is, by definition, a system-package operation: it writes to
+# /usr and therefore needs root, and it cannot honour --user or PREFIX.
+install_package() {
+    if [ "${user_install:-}" = "1" ]; then
+        die "--package installs a system package and cannot be combined with --user"
+    fi
+    if [ "${no_avif:-}" = "1" ]; then
+        die "--no-avif applies to source builds; the release packages ship AVIF"
+    fi
+    if [ -n "${PREFIX:-}" ]; then
+        log "note: PREFIX is ignored by --package; distro packages install to /usr"
+    fi
+
+    fmt="$(package_format)"
+    [ -n "$fmt" ] ||
+        die "no native package for this distribution — use the default binary install, or build from source"
+    pm="$(detect_pm)"
+    tag="$(release_tag)"
+
+    # Asset names contain the version, so "latest" is not enough: resolve a
+    # real tag (the API does that when WALLY_REF is unset).
+    case "$tag" in
+        latest)
+            die "could not determine the release version — pass WALLY_REF=vX.Y.Z"
+            ;;
+        v[0-9]* | [0-9]*) ;;
+        *)
+            die "--package needs a release tag (WALLY_REF=vX.Y.Z), got '$tag'"
+            ;;
+    esac
+
+    asset="$(package_asset "$fmt" "$tag")"
+    [ -n "$asset" ] || die "no $fmt package for $(uname -m)"
+    if ! have curl && ! have wget; then
+        die "neither curl nor wget is available to download the package"
+    fi
+
+    scratch="$(mktemp -d "${TMPDIR:-/tmp}/wally-pkg.XXXXXX")"
+    if ! fetch_asset "$tag" "$asset" "$scratch/$asset"; then
+        die "download failed — is there a $fmt package for release $tag?"
+    fi
+    verify_asset "$scratch" "$asset" "$tag"
+
+    remove_shadowing
+    case "$pm" in
+        apt) as_root apt-get install -y "$scratch/$asset" ;;
+        dnf) as_root dnf install -y "$scratch/$asset" ;;
+        pacman) as_root pacman -U --noconfirm "$scratch/$asset" ;;
+    esac
+    log "installed the native package: $asset"
+    case ":$PATH:" in
+        *:/usr/bin:*) ;;
+        *) log "note: /usr/bin is not in PATH — add it to use wally" ;;
+    esac
 }
 
 # ----------------------------------------------------------------- checks
@@ -525,10 +653,35 @@ check_env() {
         fi
     fi
     log "wayland:   no runtime deps — wally is pure Rust (wlr-layer-shell compositors only)"
+    fmt="$(package_format)"
+    if [ -n "$fmt" ]; then
+        log "package:   $fmt (install.sh --package)"
+    else
+        log "package:   none for this distribution (use the binary or source install)"
+    fi
     log "repo:      $REPO_WEB"
 }
 
+# True when the distro package database knows about wally. Removing a
+# package-managed file behind its package manager would corrupt the
+# database, so uninstall() refuses in that case and names the real command.
+package_installed() {
+    case "$(detect_pm)" in
+        apt) dpkg -s wally 2>/dev/null | grep -q '^Status: install ok installed' ;;
+        dnf) rpm -q wally >/dev/null 2>&1 ;;
+        pacman) pacman -Q wally >/dev/null 2>&1 ;;
+        *) return 1 ;;
+    esac
+}
+
 uninstall() {
+    if package_installed; then
+        case "$(detect_pm)" in
+            apt) die "wally is installed as a distribution package — remove it with: sudo apt-get remove wally" ;;
+            dnf) die "wally is installed as a distribution package — remove it with: sudo dnf remove wally" ;;
+            pacman) die "wally is installed as a distribution package — remove it with: sudo pacman -R wally" ;;
+        esac
+    fi
     removed=""
     for p in "$prefix/bin/wally" /usr/local/bin/wally /usr/bin/wally \
         "$HOME/.local/bin/wally" "$HOME/.cargo/bin/wally"; do
@@ -556,6 +709,7 @@ main() {
             --user) user_install="1" ;;
             --no-avif) no_avif="1" ;;
             --prebuilt) mode="prebuilt" ;;
+            --package) mode="package" ;;
             --from-source) mode="source" ;;
             --check) mode="check" ;;
             --uninstall) mode="uninstall" ;;
@@ -575,6 +729,7 @@ main() {
             try_prebuilt fatal
             ;;
         source) install_source ;;
+        package) install_package ;;
         auto)
             if [ "${no_avif:-}" = "1" ]; then
                 log "--no-avif: the prebuilt binary ships AVIF — building from source"
