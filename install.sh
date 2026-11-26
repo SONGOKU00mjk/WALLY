@@ -70,7 +70,7 @@ arch() {
     case "$(uname -m)" in
         x86_64) echo "x86_64" ;;
         aarch64 | arm64) echo "aarch64" ;;
-        *) echo "$(uname -m)" ;;
+        *) uname -m ;;
     esac
 }
 
@@ -500,7 +500,11 @@ check_env() {
         log "distro:    unknown (no usable ${OS_RELEASE:-/etc/os-release})"
     fi
     log "libc:      $(detect_libc) (prebuilt artifacts are glibc)"
-    have git && log "git:       $(git --version 2>/dev/null | head -n1)" || log "git:       missing"
+    if have git; then
+        log "git:       $(git --version 2>/dev/null | head -n1)"
+    else
+        log "git:       missing"
+    fi
     if have gcc || have cc || have clang; then
         log "cc:        $(cc_report)"
     else
@@ -521,6 +525,7 @@ check_env() {
         fi
     fi
     log "wayland:   no runtime deps — wally is pure Rust (wlr-layer-shell compositors only)"
+    log "repo:      $REPO_WEB"
 }
 
 uninstall() {
