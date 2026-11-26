@@ -108,8 +108,8 @@ system library requirements.
 
 | Distribution | Command |
 | --- | --- |
-| Arch (AUR) | `yay -S wally` or `yay -S wally-git` (see `packaging/arch`) |
-| Nix | `nix run github:SONGOKU00mjk/WALLY` (see `packaging/nix`) |
+| Arch | PKGBUILD for `wally` and `wally-git` in `packaging/arch` |
+| Nix | `nix run github:SONGOKU00mjk/WALLY` (flake at the repository root) |
 | Anything else | `install.sh` or `cargo install` |
 
 ### Installer options

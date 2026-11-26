@@ -70,9 +70,13 @@ about from protocol text.
   after the `mkdir`); `SHA256SUMS` matching uses `grep -F` so dots in the
   tarball name cannot act as regex wildcards; Arch package installation no
   longer performs a partial upgrade (`pacman -Sy`).
-- Metadata: repository URL casing (`wally`, not `WALLY`), removed the
-  redundant `homepage` field that made every `cargo` invocation warn, and
-  synced the version across Cargo, the AUR PKGBUILDs and the Nix flake.
+- Metadata: repository URL casing (`WALLY` is GitHub's canonical name),
+  removed the redundant `homepage` field that made every `cargo` invocation
+  warn, and synced the version across Cargo, the AUR PKGBUILDs and the Nix
+  flake.
+- The Nix flake now lives at the repository root. A subdirectory flake
+  whose package used `src = self` pointed at its own directory, not at the
+  source tree, so `nix build`/`nix run` could not work from it.
 
 ### Changed
 

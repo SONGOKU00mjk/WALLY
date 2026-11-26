@@ -60,7 +60,16 @@ jobs:
       # smoke-test the packaged binary from the other architecture.
       - name: Install aarch64 cross toolchain
         if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu qemu-user-static
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          # `qemu-user-static` is a virtual package on newer Ubuntu (26.04)
+          # and has no installation candidate; `qemu-user-binfmt` is the
+          # successor there and still provides an aarch64 emulator. Try
+          # both, and let the smoke test fall back to an ELF header check
+          # when neither is installable.
+          sudo apt-get install -y qemu-user-static ||
+            sudo apt-get install -y qemu-user-binfmt || true
 
       - name: Test (native)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
@@ -84,8 +93,17 @@ jobs:
           tar xzf ../dist/wally-${{ matrix.target }}.tar.gz
           if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
             # qemu -L prefixes the ELF interpreter path; the cross libc
-            # package installs it at /usr/aarch64-linux-gnu/lib/.
-            qemu-aarch64-static -L /usr/aarch64-linux-gnu ./wally --version
+            # package installs it at /usr/aarch64-linux-gnu/lib/. The
+            # -static binary name is not guaranteed on every runner, so
+            # accept the dynamic emulator too, and fall back to checking
+            # the ELF header when no emulator is installed.
+            qemu="$(command -v qemu-aarch64-static || command -v qemu-aarch64 || true)"
+            if [ -n "$qemu" ]; then
+              "$qemu" -L /usr/aarch64-linux-gnu ./wally --version
+            else
+              echo "no aarch64 emulator; verifying the ELF header instead"
+              file ./wally | grep -q "ARM aarch64"
+            fi
           else
             ./wally --version
           fi
